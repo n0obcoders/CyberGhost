@@ -840,8 +840,7 @@ fun CaptiveScreen(config: CaptiveConfig, entries: List<CaptiveEntry>, onUpdateCo
                 Text(if (config.enabled) "ACTIVE" else "OFF", fontSize = 9.sp, color = if (config.enabled) CgGreen else CgGray, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
             }
         }
-        TabRow(selectedTabIndex = activeTab, containerColor = CgSurface, contentColor = CgGreen, indicator = { tabPositions: List<TabPosition> ->
-            TabRowDefaults.SecondaryIndicator(modifier = Modifier.tabIndicatorOffset(tabPositions[activeTab]), color = CgGreen)
+        TabRow(selectedTabIndex = activeTab, containerColor = CgSurface, contentColor = CgGreen) {
         }) {
             Tab(selected = activeTab == 0, onClick = { activeTab = 0 }) { Text("Config", fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp)) }
             Tab(selected = activeTab == 1, onClick = { activeTab = 1 }) {
