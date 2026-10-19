@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.nio.ByteBuffer
 import java.time.Instant
 
 data class DnsQuery(
@@ -20,7 +21,9 @@ data class DnsQuery(
 
 class DnsCapture(
     private val listenPort: Int = 5353,
-    private val upstreamDns: String = "8.8.8.8"
+    private val upstreamDns: String = "8.8.8.8",
+    private val gatewayIp: String = "192.168.43.1",
+    var transparentMode: Boolean = true  // redirect all DNS to gateway
 ) {
     private val _queries = MutableSharedFlow<DnsQuery>(replay = 0, extraBufferCapacity = 512)
     val queries: SharedFlow<DnsQuery> = _queries
@@ -28,10 +31,24 @@ class DnsCapture(
     private var running = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+    // domains we never hijack — let these resolve normally
+    private val bypassDomains = setOf(
+        "connectivitycheck.gstatic.com",
+        "clients3.google.com",
+        "play.googleapis.com",
+        "android.clients.google.com",
+        "mtalk.google.com",
+        "alt1-mtalk.google.com",
+        "alt2-mtalk.google.com",
+        "alt3-mtalk.google.com",
+        "alt4-mtalk.google.com"
+    )
+
     fun start() {
         running = true
         try {
             socket = DatagramSocket(listenPort)
+            Log.i("CG2", "DNS server started on port $listenPort, transparent=$transparentMode")
         } catch (e: Exception) {
             Log.e("CG2", "DNS: failed to bind port $listenPort", e)
             running = false
@@ -41,7 +58,7 @@ class DnsCapture(
             val buf = ByteArray(512)
             while (running) {
                 try {
-                    val inPacket = DatagramPacket(buf, buf.size)
+                    val inPacket = DatagramPacket(buf.clone(), buf.size)
                     socket?.receive(inPacket)
                     launch { handleQuery(inPacket) }
                 } catch (_: Exception) { if (!running) break }
@@ -58,24 +75,81 @@ class DnsCapture(
     private suspend fun handleQuery(inPacket: DatagramPacket) {
         try {
             val data = inPacket.data.copyOf(inPacket.length)
-            val domain = parseDomainName(data)
-            val qType = parseQueryType(data)
-            val upstream = DatagramSocket()
-            upstream.soTimeout = 3000
-            val fwdPacket = DatagramPacket(data, data.size, InetAddress.getByName(upstreamDns), 53)
-            upstream.send(fwdPacket)
-            val responseBuf = ByteArray(512)
-            val responsePacket = DatagramPacket(responseBuf, responseBuf.size)
-            var resolvedIp: String? = null
-            try {
-                upstream.receive(responsePacket)
-                resolvedIp = parseResponseIp(responsePacket.data, responsePacket.length)
-                socket?.send(DatagramPacket(responsePacket.data, responsePacket.length, inPacket.address, inPacket.port))
-            } catch (_: Exception) {} finally { upstream.close() }
-            _queries.tryEmit(DnsQuery(Instant.now(), inPacket.address.hostAddress ?: "unknown", inPacket.port, domain ?: "unparseable", qType ?: "?", resolvedIp))
+            val domain = parseDomainName(data) ?: "unparseable"
+            val qType = parseQueryType(data) ?: "?"
+
+            if (transparentMode && qType == "A" && !shouldBypass(domain)) {
+                // spoof: respond with gateway IP
+                val spoofed = buildSpoofedResponse(data, inPacket.length, gatewayIp)
+                socket?.send(DatagramPacket(spoofed, spoofed.size, inPacket.address, inPacket.port))
+
+                _queries.tryEmit(DnsQuery(
+                    Instant.now(), inPacket.address.hostAddress ?: "unknown",
+                    inPacket.port, domain, qType, "$gatewayIp (spoofed)"
+                ))
+                Log.d("CG2", "DNS spoof: $domain -> $gatewayIp")
+            } else {
+                // pass through to upstream
+                val upstream = DatagramSocket()
+                upstream.soTimeout = 3000
+                upstream.send(DatagramPacket(data, data.size, InetAddress.getByName(upstreamDns), 53))
+                val responseBuf = ByteArray(512)
+                val responsePacket = DatagramPacket(responseBuf, responseBuf.size)
+                var resolvedIp: String? = null
+                try {
+                    upstream.receive(responsePacket)
+                    resolvedIp = parseResponseIp(responsePacket.data, responsePacket.length)
+                    socket?.send(DatagramPacket(responsePacket.data, responsePacket.length, inPacket.address, inPacket.port))
+                } catch (_: Exception) {} finally { upstream.close() }
+
+                _queries.tryEmit(DnsQuery(
+                    Instant.now(), inPacket.address.hostAddress ?: "unknown",
+                    inPacket.port, domain, qType, resolvedIp
+                ))
+            }
         } catch (e: Exception) {
             Log.e("CG2", "DNS query handling failed", e)
         }
+    }
+
+    private fun shouldBypass(domain: String): Boolean {
+        return bypassDomains.any { domain.equals(it, ignoreCase = true) || domain.endsWith(".$it", ignoreCase = true) }
+    }
+
+    private fun buildSpoofedResponse(query: ByteArray, queryLen: Int, ip: String): ByteArray {
+        val buf = ByteBuffer.allocate(queryLen + 16)
+
+        // copy query header, flip to response
+        buf.put(query, 0, 2)                    // transaction ID
+        buf.putShort(0x8180.toShort())           // flags: response, no error
+        buf.putShort(1)                          // questions: 1
+        buf.putShort(1)                          // answers: 1
+        buf.putShort(0)                          // authority: 0
+        buf.putShort(0)                          // additional: 0
+
+        // copy question section from query (skip 12-byte header)
+        var pos = 12
+        while (pos < queryLen && query[pos].toInt() != 0) {
+            pos += (query[pos].toInt() and 0xFF) + 1
+        }
+        pos += 5 // null + qtype(2) + qclass(2)
+        buf.put(query, 12, pos - 12)
+
+        // answer section — pointer to name in question
+        buf.putShort(0xC00C.toInt().toShort())   // name pointer to offset 12
+        buf.putShort(1)                          // type A
+        buf.putShort(1)                          // class IN
+        buf.putInt(60)                           // TTL 60 seconds
+        buf.putShort(4)                          // data length 4
+
+        // IP address bytes
+        val parts = ip.split(".")
+        for (p in parts) buf.put((p.toInt() and 0xFF).toByte())
+
+        val result = ByteArray(buf.position())
+        buf.flip()
+        buf.get(result)
+        return result
     }
 
     private fun parseDomainName(data: ByteArray): String? {
