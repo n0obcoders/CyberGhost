@@ -12,7 +12,7 @@ jobs:
         run: |
           set +o pipefail
           printf 'y\n%.0s' {1..20} | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-37" "build-tools;35.0.0" > /dev/null 2>&1
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-35" "build-tools;35.0.0" > /dev/null 2>&1
           exit 0
       - name: Generate Gradle Wrapper
         run: |
