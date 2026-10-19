@@ -1,19 +1,14 @@
 package com.cyberghost
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import com.cyberghost.core.*
 import com.cyberghost.ui.*
 import kotlinx.coroutines.launch
 import android.content.Intent
 import android.net.Uri
-import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import java.io.File
 
@@ -27,37 +22,9 @@ class MainActivity : ComponentActivity() {
     private var mediaServer: MediaServer? = null
     private var dnsCapture: DnsCapture? = null
 
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { results ->
-        val allGranted = results.values.all { it }
-        if (allGranted) initApp()
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val perms = mutableListOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.INTERNET
-        )
-        if (Build.VERSION.SDK_INT >= 33) {
-            perms.add(Manifest.permission.POST_NOTIFICATIONS)
-            perms.add(Manifest.permission.NEARBY_WIFI_DEVICES)
-        }
-
-        val needsRequest = perms.any {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (needsRequest) {
-            permissionLauncher.launch(perms.toTypedArray())
-        } else {
-            initApp()
-        }
-    }
-
-    private fun initApp() {
         certManager = CertManager(filesDir)
         deviceManager = DeviceManager()
         contentInjector = ContentInjector()
