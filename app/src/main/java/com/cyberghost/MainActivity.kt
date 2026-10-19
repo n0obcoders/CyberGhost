@@ -1,7 +1,8 @@
 package com.cyberghost
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
+import android.util.Log
+import androidx.appcompat.app.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -25,57 +26,89 @@ private val CyberGhostColors = darkColorScheme(
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var certManager: CertManager
-    private lateinit var deviceManager: DeviceManager
-    private lateinit var contentInjector: ContentInjector
+    private var certManager: CertManager? = null
+    private var deviceManager: DeviceManager? = null
+    private var contentInjector: ContentInjector? = null
     private var proxy: InterceptProxy? = null
     private var c2Server: WebSocketC2Server? = null
     private var mediaServer: MediaServer? = null
     private var dnsCapture: DnsCapture? = null
+    private var hookJs: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        certManager = CertManager(filesDir)
-        deviceManager = DeviceManager()
-        contentInjector = ContentInjector()
-        val hookJs = assets.open("hook.js").bufferedReader().readText()
 
         setContent {
             MaterialTheme(colorScheme = CyberGhostColors) {
                 val packets = remember { mutableStateListOf<InterceptedPacket>() }
                 val interceptQueue = remember { mutableStateListOf<PendingIntercept>() }
-                val devices by deviceManager.deviceList.collectAsState()
+                val devices = remember { mutableStateListOf<ConnectedDevice>() }
                 val events = remember { mutableStateListOf<C2Event>() }
                 var isRunning by remember { mutableStateOf(false) }
                 var mode by remember { mutableStateOf(InterceptMode.PASSTHROUGH) }
                 var config by remember { mutableStateOf(InjectionConfig()) }
+                var hookedSessions by remember { mutableStateOf<List<HookedSession>>(emptyList()) }
 
                 LaunchedEffect(isRunning) {
                     if (isRunning) {
-                        proxy = InterceptProxy(8080, certManager, contentInjector).also { p ->
-                            p.mode = mode; p.start()
-                            launch {
-                                p.packets.collect { pkt ->
-                                    packets.add(pkt); if (packets.size > 2000) packets.removeAt(0)
-                                    deviceManager.trackRequest(pkt.sourceIp, pkt.headers["User-Agent"], pkt.body.size.toLong())
+                        try {
+                            if (certManager == null) {
+                                certManager = CertManager(filesDir)
+                            }
+                            if (deviceManager == null) {
+                                deviceManager = DeviceManager()
+                            }
+                            if (contentInjector == null) {
+                                contentInjector = ContentInjector()
+                            }
+                            if (hookJs.isEmpty()) {
+                                hookJs = assets.open("hook.js").bufferedReader().readText()
+                            }
+
+                            contentInjector?.config = config
+
+                            proxy = InterceptProxy(8080, certManager!!, contentInjector!!).also { p ->
+                                p.mode = mode; p.start()
+                                launch {
+                                    p.packets.collect { pkt ->
+                                        packets.add(pkt); if (packets.size > 2000) packets.removeAt(0)
+                                        deviceManager?.trackRequest(pkt.sourceIp, pkt.headers["User-Agent"], pkt.body.size.toLong())
+                                    }
                                 }
                             }
+                            mediaServer = MediaServer(9090, this@MainActivity, hookJs).also { it.start() }
+                            c2Server = WebSocketC2Server(9091, deviceManager!!).also { c2 ->
+                                c2.start()
+                                launch { c2.events.collect { event -> events.add(event); if (events.size > 500) events.removeAt(0) } }
+                            }
+                            dnsCapture = DnsCapture(5353).also { it.start() }
+
+                            // poll device list and hooked sessions
+                            launch {
+                                while (true) {
+                                    kotlinx.coroutines.delay(500)
+                                    val dm = deviceManager
+                                    if (dm != null) {
+                                        val devList = dm.getAllDevices()
+                                        devices.clear(); devices.addAll(devList)
+                                        hookedSessions = dm.getHookedSessions()
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("CG2", "Failed to start engines", e)
+                            isRunning = false
                         }
-                        mediaServer = MediaServer(9090, this@MainActivity, hookJs).also { it.start() }
-                        c2Server = WebSocketC2Server(9091, deviceManager).also { c2 ->
-                            c2.start()
-                            launch { c2.events.collect { event -> events.add(event); if (events.size > 500) events.removeAt(0) } }
-                        }
-                        dnsCapture = DnsCapture(5353).also { it.start() }
                     } else {
-                        proxy?.stop(); proxy = null; c2Server?.stop(); c2Server = null
-                        mediaServer?.stop(); mediaServer = null; dnsCapture?.stop(); dnsCapture = null
+                        proxy?.stop(); proxy = null
+                        c2Server?.stop(); c2Server = null
+                        mediaServer?.stop(); mediaServer = null
+                        dnsCapture?.stop(); dnsCapture = null
                     }
                 }
 
                 LaunchedEffect(mode) { proxy?.mode = mode }
-                LaunchedEffect(config) { contentInjector.config = config }
+                LaunchedEffect(config) { contentInjector?.config = config }
 
                 LaunchedEffect(isRunning) {
                     if (isRunning) {
@@ -91,7 +124,7 @@ class MainActivity : ComponentActivity() {
 
                 CyberGhostScreen(
                     interceptQueue = interceptQueue, packets = packets, devices = devices,
-                    hookedSessions = deviceManager.getHookedSessions(), mode = mode,
+                    hookedSessions = hookedSessions, mode = mode,
                     isRunning = isRunning, events = events,
                     onModeChange = { mode = it }, onToggle = { isRunning = !isRunning },
                     onForward = { id, pkt -> proxy?.forwardPacket(id, pkt) },
@@ -118,17 +151,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun exportCa() {
-        val pem = certManager.getCaCertPem()
-        val file = File(cacheDir, "cyberghost_ca.crt")
-        file.writeText(pem)
-        val uri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-        startActivity(Intent.createChooser(
-            Intent(Intent.ACTION_SEND).apply {
-                type = "application/x-x509-ca-cert"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }, "Export CyberGhost CA"
-        ))
+        try {
+            val pem = certManager?.getCaCertPem() ?: return
+            val file = File(cacheDir, "cyberghost_ca.crt")
+            file.writeText(pem)
+            val uri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            startActivity(Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "application/x-x509-ca-cert"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }, "Export CyberGhost CA"
+            ))
+        } catch (e: Exception) {
+            Log.e("CG2", "CA export failed", e)
+        }
     }
 
     override fun onDestroy() {

@@ -18,12 +18,18 @@ import javax.net.ssl.KeyManager
 
 class CertManager(private val storageDir: File) {
 
+    private val bcProvider: Provider
     private val caKeyPair: KeyPair
     private val caCert: X509Certificate
     private val hostCertCache = ConcurrentHashMap<String, Pair<PrivateKey, X509Certificate>>()
 
     init {
-        Security.addProvider(BouncyCastleProvider())
+        // remove Android's crippled BouncyCastle, add the full one
+        Security.removeProvider("BC")
+        val bp = BouncyCastleProvider()
+        Security.insertProviderAt(bp, 1)
+        bcProvider = bp
+
         val caFile = File(storageDir, "cyberghost_ca.p12")
         if (caFile.exists()) {
             val ks = KeyStore.getInstance("PKCS12")
@@ -69,9 +75,9 @@ class CertManager(private val storageDir: File) {
         val san = GeneralNames(GeneralName(GeneralName.dNSName, host))
         builder.addExtension(Extension.subjectAlternativeName, false, san)
         builder.addExtension(Extension.basicConstraints, true, BasicConstraints(false))
-        val signer = JcaContentSignerBuilder("SHA256WithRSA").build(caKeyPair.private)
+        val signer = JcaContentSignerBuilder("SHA256WithRSA").setProvider(bcProvider).build(caKeyPair.private)
         val holder: X509CertificateHolder = builder.build(signer)
-        val cert = JcaX509CertificateConverter().setProvider("BC").getCertificate(holder)
+        val cert = JcaX509CertificateConverter().setProvider(bcProvider).getCertificate(holder)
         return hostKeyPair.private to cert
     }
 
@@ -85,8 +91,8 @@ class CertManager(private val storageDir: File) {
         )
         builder.addExtension(Extension.basicConstraints, true, BasicConstraints(true))
         builder.addExtension(Extension.keyUsage, true, KeyUsage(KeyUsage.keyCertSign or KeyUsage.cRLSign))
-        val signer = JcaContentSignerBuilder("SHA256WithRSA").build(keyPair.private)
-        return JcaX509CertificateConverter().setProvider("BC").getCertificate(builder.build(signer))
+        val signer = JcaContentSignerBuilder("SHA256WithRSA").setProvider(bcProvider).build(keyPair.private)
+        return JcaX509CertificateConverter().setProvider(bcProvider).getCertificate(builder.build(signer))
     }
 
     private fun generateKeyPair(bits: Int): KeyPair {
