@@ -38,4 +38,5 @@ dependencies {
     implementation("org.bouncycastle:bcprov-jdk18on:1.77"); implementation("org.bouncycastle:bcpkix-jdk18on:1.77")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
     implementation("androidx.core:core-ktx:1.12.0"); implementation("org.json:json:20231013")
+    implementation("androidx.appcompat:appcompat:1.6.1")
 }
