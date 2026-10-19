@@ -169,7 +169,7 @@ class FrontendHandler(
             body = bodyBytes, isRequest = true
         )
 
-        val modified = proxy.processPacket(packet)
+        val modified = proxy.processPacket(packet); injector.inspectRequest(packet)
         forwardRequest(ctx, modified, host)
     }
 
@@ -226,7 +226,7 @@ class MitmInterceptHandler(
                 body = bodyBytes, isRequest = true
             )
 
-            val modified = proxy.processPacket(packet)
+            val modified = proxy.processPacket(packet); injector.inspectRequest(packet)
             forwardToTarget(ctx, modified)
         } catch (e: Exception) {
             Log.e("CG2", "MITM handler error", e)
@@ -313,4 +313,9 @@ class ResponseInterceptHandler(
     override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
         ctx.close(); inboundChannel.close()
     }
+}
+
+// extension to call harvester — invoked from FrontendHandler and MitmInterceptHandler
+fun InterceptProxy.inspectRequest(packet: InterceptedPacket, injector: ContentInjector) {
+    injector.inspectRequest(packet)
 }

@@ -27,7 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cyberghost.core.*
 
-enum class Screen { DASHBOARD, INTERCEPT, DEVICES, HOOKED, NETWORK, STATS, SETTINGS, ABOUT }
+enum class Screen { DASHBOARD, INTERCEPT, CREDENTIALS, DEVICES, HOOKED, NETWORK, STATS, SETTINGS, ABOUT }
 
 @Composable
 fun CyberGhostApp(
@@ -72,6 +72,7 @@ fun CyberGhostApp(
                 NavItem(Screen.DASHBOARD, currentScreen, Icons.Filled.Dashboard, "Home") { currentScreen = it }
                 NavItem(Screen.INTERCEPT, currentScreen, Icons.Filled.SwapVert, "Intercept") { currentScreen = it }
                 NavItem(Screen.DEVICES, currentScreen, Icons.Filled.Devices, "Devices") { currentScreen = it }
+                NavItem(Screen.CREDENTIALS, currentScreen, Icons.Filled.Key, "Creds") { currentScreen = it }
                 NavItem(Screen.HOOKED, currentScreen, Icons.Filled.Phishing, "Hooked") { currentScreen = it }
                 NavItem(Screen.SETTINGS, currentScreen, Icons.Filled.Settings, "More") { currentScreen = it }
             }
@@ -90,6 +91,7 @@ fun CyberGhostApp(
                 Screen.HOOKED -> HookedScreen(hookedSessions, events, onCommand)
                 Screen.NETWORK -> NetworkMapScreen(networkHosts, isScanning, onScanNetwork)
                 Screen.STATS -> StatsScreen(trafficStats)
+                Screen.CREDENTIALS -> CredentialsScreen(credentials = emptyList(), onClear = {})
                 Screen.SETTINGS -> SettingsScreen(mode, onModeChange, currentConfig, onConfigUpdate, profiles, onSaveProfile, onLoadProfile, onDeleteProfile, onExportCa) { currentScreen = it }
                 Screen.ABOUT -> AboutScreen()
             }
@@ -704,6 +706,7 @@ fun SettingsScreen(
                     SettingsField("Video URL", config.videoUrl ?: "") { onConfigUpdate(config.copy(videoUrl = it.ifBlank { null })) }
                     SettingsField("Document URL", config.documentUrl ?: "") { onConfigUpdate(config.copy(documentUrl = it.ifBlank { null })) }
                     SettingsField("Redirect URL", config.redirectUrl ?: "") { onConfigUpdate(config.copy(redirectUrl = it.ifBlank { null })) }
+                    ToggleRow("SSLStrip (downgrade HTTPS links)", config.sslStripEnabled) { onConfigUpdate(config.copy(sslStripEnabled = it)) }
                     SettingsField("Custom JS", config.customJs ?: "") { onConfigUpdate(config.copy(customJs = it.ifBlank { null })) }
                 }
             }
@@ -866,5 +869,101 @@ fun formatBytes(bytes: Long): String {
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
         bytes < 1024 * 1024 * 1024 -> "${"%.1f".format(bytes / (1024.0 * 1024.0))} MB"
         else -> "${"%.2f".format(bytes / (1024.0 * 1024.0 * 1024.0))} GB"
+    }
+}
+
+// ============================
+// CREDENTIALS SCREEN
+// ============================
+@Composable
+fun CredentialsScreen(credentials: List<HarvestedCredential>, onClear: () -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Column {
+                Text("Credentials", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+                Text("${credentials.size} captured", fontSize = 12.sp, color = CgRed)
+            }
+            if (credentials.isNotEmpty()) {
+                TextButton(onClick = onClear) { Text("Clear All", fontSize = 12.sp, color = CgRed) }
+            }
+        }
+        if (credentials.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Filled.Lock, contentDescription = null, tint = CgGray, modifier = Modifier.size(48.dp))
+                    Spacer(Modifier.height(12.dp))
+                    Text("No credentials captured yet", fontSize = 14.sp, color = CgGray)
+                    Text("Start capture and wait for targets to log in", fontSize = 12.sp, color = CgGray.copy(0.6f))
+                }
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(credentials.reversed()) { cred ->
+                    CredentialCard(cred)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CredentialCard(cred: HarvestedCredential) {
+    val typeColor = when (cred.type) {
+        CredentialType.FORM_LOGIN -> CgRed
+        CredentialType.BASIC_AUTH -> CgAmber
+        CredentialType.BEARER_TOKEN -> CgCyan
+        CredentialType.JSON_LOGIN -> CgMagenta
+        CredentialType.API_KEY -> CgBlue
+        CredentialType.COOKIE_SESSION -> CgDimGreen
+    }
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(Modifier.fillMaxWidth().clickable { expanded = !expanded },
+        colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp),
+        border = BorderStroke(1.dp, typeColor.copy(0.3f))) {
+        Column(Modifier.padding(14.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(typeColor))
+                    Spacer(Modifier.width(8.dp))
+                    Text(cred.host, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = CgWhite, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                }
+                Badge(containerColor = typeColor.copy(0.2f)) {
+                    Text(cred.type.name.replace("_", " "), fontSize = 8.sp, color = typeColor, modifier = Modifier.padding(horizontal = 4.dp))
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            cred.username?.let {
+                CredRow("Username", it, CgCyan)
+            }
+            cred.password?.let {
+                CredRow("Password", it, CgRed)
+            }
+            cred.token?.let {
+                CredRow("Token", it.take(40) + if (it.length > 40) "..." else "", CgAmber)
+            }
+            Text(cred.path, fontSize = 9.sp, color = CgGray, maxLines = 1, overflow = TextOverflow.Ellipsis)
+
+            if (expanded && cred.rawFields.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider(color = CgGray.copy(0.2f))
+                Spacer(Modifier.height(6.dp))
+                Text("Raw Fields", fontSize = 10.sp, color = CgGray, fontWeight = FontWeight.SemiBold)
+                cred.rawFields.entries.forEach { (k, v) ->
+                    Text("$k: $v", fontSize = 9.sp, color = CgGray, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text("Source: ${cred.sourceIp} · ${cred.protocol}", fontSize = 9.sp, color = CgGray.copy(0.6f))
+                Text(cred.notes, fontSize = 9.sp, color = CgGray.copy(0.6f))
+            }
+        }
+    }
+}
+
+@Composable
+fun CredRow(label: String, value: String, color: Color) {
+    Row(Modifier.padding(vertical = 2.dp)) {
+        Text("$label: ", fontSize = 11.sp, color = CgGray, fontWeight = FontWeight.Medium)
+        Text(value, fontSize = 11.sp, color = color, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }

