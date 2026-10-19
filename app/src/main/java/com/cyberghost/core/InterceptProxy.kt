@@ -124,7 +124,7 @@ class FrontendHandler(
         pipeline.remove(HttpServerCodec::class.java)
         pipeline.remove(HttpObjectAggregator::class.java)
         pipeline.remove(this)
-        val sslCtx = SslContextBuilder.forServer(certManager.getKeyManagerForHost(host)).build()
+        val sslCtx = SslContextBuilder.forServer(certManager.getKeyManagerForHost(host)[0]).build()
         pipeline.addFirst("ssl", sslCtx.newHandler(ctx.alloc()))
         pipeline.addLast(HttpServerCodec())
         pipeline.addLast(HttpObjectAggregator(4_194_304))
