@@ -1,0 +1,5 @@
+-keep class io.netty.** { *; }
+-keep class org.bouncycastle.** { *; }
+-dontwarn io.netty.**
+-dontwarn org.bouncycastle.**
+-dontwarn sun.misc.**
