@@ -31,6 +31,8 @@ enum class Screen { DASHBOARD, INTERCEPT, CREDENTIALS, DEVICES, HOOKED, NETWORK,
 
 @Composable
 fun CyberGhostApp(
+    credentials: List<HarvestedCredential>,
+    onClearCredentials: () -> Unit,
     interceptQueue: List<PendingIntercept>,
     packets: List<InterceptedPacket>,
     devices: List<ConnectedDevice>,
@@ -91,7 +93,7 @@ fun CyberGhostApp(
                 Screen.HOOKED -> HookedScreen(hookedSessions, events, onCommand)
                 Screen.NETWORK -> NetworkMapScreen(networkHosts, isScanning, onScanNetwork)
                 Screen.STATS -> StatsScreen(trafficStats)
-                Screen.CREDENTIALS -> CredentialsScreen(credentials = emptyList(), onClear = {})
+                Screen.CREDENTIALS -> CredentialsScreen(credentials = credentials, onClear = onClearCredentials)
                 Screen.SETTINGS -> SettingsScreen(mode, onModeChange, currentConfig, onConfigUpdate, profiles, onSaveProfile, onLoadProfile, onDeleteProfile, onExportCa) { currentScreen = it }
                 Screen.ABOUT -> AboutScreen()
             }

