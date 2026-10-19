@@ -2,7 +2,7 @@ package com.cyberghost
 
 import android.os.Bundle
 import android.util.Log
-import androidx.appcompat.app.ComponentActivity
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -37,6 +37,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.i("CG2", "MainActivity onCreate")
+
+        try {
+            hookJs = assets.open("hook.js").bufferedReader().readText()
+        } catch (e: Exception) {
+            Log.e("CG2", "Failed to load hook.js", e)
+            hookJs = "// hook.js load failed"
+        }
 
         setContent {
             MaterialTheme(colorScheme = CyberGhostColors) {
@@ -52,19 +60,9 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(isRunning) {
                     if (isRunning) {
                         try {
-                            if (certManager == null) {
-                                certManager = CertManager(filesDir)
-                            }
-                            if (deviceManager == null) {
-                                deviceManager = DeviceManager()
-                            }
-                            if (contentInjector == null) {
-                                contentInjector = ContentInjector()
-                            }
-                            if (hookJs.isEmpty()) {
-                                hookJs = assets.open("hook.js").bufferedReader().readText()
-                            }
-
+                            if (certManager == null) certManager = CertManager(filesDir)
+                            if (deviceManager == null) deviceManager = DeviceManager()
+                            if (contentInjector == null) contentInjector = ContentInjector()
                             contentInjector?.config = config
 
                             proxy = InterceptProxy(8080, certManager!!, contentInjector!!).also { p ->
@@ -82,28 +80,23 @@ class MainActivity : ComponentActivity() {
                                 launch { c2.events.collect { event -> events.add(event); if (events.size > 500) events.removeAt(0) } }
                             }
                             dnsCapture = DnsCapture(5353).also { it.start() }
-
-                            // poll device list and hooked sessions
                             launch {
                                 while (true) {
                                     kotlinx.coroutines.delay(500)
-                                    val dm = deviceManager
-                                    if (dm != null) {
-                                        val devList = dm.getAllDevices()
-                                        devices.clear(); devices.addAll(devList)
+                                    deviceManager?.let { dm ->
+                                        devices.clear(); devices.addAll(dm.getAllDevices())
                                         hookedSessions = dm.getHookedSessions()
                                     }
                                 }
                             }
+                            Log.i("CG2", "All engines started")
                         } catch (e: Exception) {
-                            Log.e("CG2", "Failed to start engines", e)
+                            Log.e("CG2", "Engine start failed", e)
                             isRunning = false
                         }
                     } else {
-                        proxy?.stop(); proxy = null
-                        c2Server?.stop(); c2Server = null
-                        mediaServer?.stop(); mediaServer = null
-                        dnsCapture?.stop(); dnsCapture = null
+                        proxy?.stop(); proxy = null; c2Server?.stop(); c2Server = null
+                        mediaServer?.stop(); mediaServer = null; dnsCapture?.stop(); dnsCapture = null
                     }
                 }
 
