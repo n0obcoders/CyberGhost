@@ -841,7 +841,6 @@ fun CaptiveScreen(config: CaptiveConfig, entries: List<CaptiveEntry>, onUpdateCo
             }
         }
         TabRow(selectedTabIndex = activeTab, containerColor = CgSurface, contentColor = CgGreen) {
-        }) {
             Tab(selected = activeTab == 0, onClick = { activeTab = 0 }) { Text("Config", fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp)) }
             Tab(selected = activeTab == 1, onClick = { activeTab = 1 }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
