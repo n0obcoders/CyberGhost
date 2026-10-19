@@ -14,7 +14,10 @@ jobs:
           printf 'y\n%.0s' {1..20} | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1
           $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-37" "build-tools;35.0.0" > /dev/null 2>&1
           exit 0
-      - run: chmod +x gradlew
+      - name: Generate Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.9
+          chmod +x gradlew
       - run: ./gradlew assembleDebug
       - uses: actions/upload-artifact@v4
         with: { name: CyberGhost2-debug, path: app/build/outputs/apk/debug/app-debug.apk }
