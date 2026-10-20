@@ -31,7 +31,7 @@ class MainActivity : ComponentActivity() {
     private var hookJs: String = ""
 
     // use ArpScanner instead of DeviceManager for device discovery
-    private val arpScanner = ArpScanner()
+    private lateinit var arpScanner: ArpScanner
     private val trafficStats = TrafficStats()
     private val networkMapper = NetworkMapper()
     private val certViewer = SslCertViewer()
@@ -50,6 +50,7 @@ class MainActivity : ComponentActivity() {
         Log.i("CG2", "MainActivity onCreate")
 
         profileManager = ProfileManager(this)
+        arpScanner = ArpScanner(this)
         packetExporter = PacketExporter(this)
         sessionSave = SessionSave(this)
         createNotificationChannel()
