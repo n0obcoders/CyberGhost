@@ -20,7 +20,7 @@ data class DnsQuery(
 )
 
 class DnsCapture(
-    private val listenPort: Int = 53,  // port 53 — real DNS port
+    private val listenPort: Int = 53,
     private val upstreamDns: String = "8.8.8.8",
     var gatewayIp: String = "192.168.43.1",
     var transparentMode: Boolean = true
@@ -35,25 +35,26 @@ class DnsCapture(
         "connectivitycheck.gstatic.com", "clients3.google.com",
         "play.googleapis.com", "android.clients.google.com",
         "mtalk.google.com", "captive.apple.com",
-        "www.apple.com", "captivedetect.apple.com"
+        "www.apple.com", "captivedetect.apple.com",
+        "time.android.com", "ntp.ubuntu.com"
     )
 
     fun start() {
         running = true
-        try {
-            socket = DatagramSocket(listenPort)
-            Log.i("CG2", "DNS server started on port $listenPort, gateway=$gatewayIp, transparent=$transparentMode")
-        } catch (e: Exception) {
-            Log.e("CG2", "DNS: failed to bind port $listenPort — try running as root or use iptables redirect", e)
-            // try port 5353 as fallback
+        // try port 53 first, fall back to 5353
+        for (port in listOf(listenPort, 5353, 15353)) {
             try {
-                socket = DatagramSocket(5353)
-                Log.i("CG2", "DNS fallback to port 5353")
-            } catch (e2: Exception) {
-                Log.e("CG2", "DNS: port 5353 also failed", e2)
-                running = false
-                return
+                socket = DatagramSocket(port)
+                Log.i("CG2", "DNS server on port $port, gateway=$gatewayIp")
+                break
+            } catch (e: Exception) {
+                Log.w("CG2", "DNS: port $port failed: ${e.message}")
             }
+        }
+        if (socket == null) {
+            Log.e("CG2", "DNS: all ports failed")
+            running = false
+            return
         }
         scope.launch {
             val buf = ByteArray(512)
@@ -82,8 +83,8 @@ class DnsCapture(
             if (transparentMode && qType == "A" && !shouldBypass(domain)) {
                 val spoofed = buildSpoofedResponse(data, inPacket.length, gatewayIp)
                 socket?.send(DatagramPacket(spoofed, spoofed.size, inPacket.address, inPacket.port))
-                _queries.tryEmit(DnsQuery(Instant.now(), inPacket.address.hostAddress ?: "unknown", inPacket.port, domain, qType, "$gatewayIp [spoofed]"))
-                Log.d("CG2", "DNS spoof: $domain → $gatewayIp")
+                _queries.tryEmit(DnsQuery(Instant.now(), inPacket.address.hostAddress ?: "?",
+                    inPacket.port, domain, qType, "$gatewayIp [spoofed]"))
             } else {
                 val upstream = DatagramSocket()
                 upstream.soTimeout = 3000
@@ -96,10 +97,11 @@ class DnsCapture(
                     resolvedIp = parseResponseIp(responsePacket.data, responsePacket.length)
                     socket?.send(DatagramPacket(responsePacket.data, responsePacket.length, inPacket.address, inPacket.port))
                 } catch (_: Exception) {} finally { upstream.close() }
-                _queries.tryEmit(DnsQuery(Instant.now(), inPacket.address.hostAddress ?: "unknown", inPacket.port, domain, qType, resolvedIp))
+                _queries.tryEmit(DnsQuery(Instant.now(), inPacket.address.hostAddress ?: "?",
+                    inPacket.port, domain, qType, resolvedIp))
             }
         } catch (e: Exception) {
-            Log.e("CG2", "DNS query handling failed", e)
+            Log.e("CG2", "DNS query error", e)
         }
     }
 
@@ -130,7 +132,10 @@ class DnsCapture(
             val len = data[pos].toInt() and 0xFF; if (len == 0) break
             if (sb.isNotEmpty()) sb.append('.')
             pos++
-            for (i in 0 until len) { if (pos + i >= data.size) return sb.toString(); sb.append(data[pos + i].toInt().toChar()) }
+            for (i in 0 until len) {
+                if (pos + i >= data.size) return sb.toString()
+                sb.append(data[pos + i].toInt().toChar())
+            }
             pos += len
         }
         return sb.toString()

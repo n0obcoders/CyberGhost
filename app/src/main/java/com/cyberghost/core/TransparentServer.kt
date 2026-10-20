@@ -13,15 +13,14 @@ import io.netty.handler.codec.http.*
 import io.netty.handler.ssl.SslContextBuilder
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory
 import java.net.InetSocketAddress
-import java.time.Instant
 
 /**
- * Transparent HTTP server on port 80.
- * When DNS spoofs all domains to gateway, browsers hit us directly.
- * We read the Host header and forward to the real server.
+ * Transparent HTTP server on port 8081.
+ * DNS spoofs all domains to gateway — browsers connect here.
+ * We read Host header and forward to real server.
  */
 class TransparentHttpServer(
-    private val port: Int = 80,
+    private val port: Int = 8081,
     private val proxy: InterceptProxy,
     private val injector: ContentInjector
 ) {
@@ -46,9 +45,9 @@ class TransparentHttpServer(
                 })
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
                 .bind(port).sync()
-            Log.i("CG2", "Transparent HTTP server on port $port")
+            Log.i("CG2", "Transparent HTTP on port $port")
         } catch (e: Exception) {
-            Log.e("CG2", "Transparent HTTP failed to bind port $port", e)
+            Log.e("CG2", "Transparent HTTP failed on port $port: ${e.message}")
         }
     }
 
@@ -66,8 +65,7 @@ class TransparentHttpHandler(
     override fun channelRead0(ctx: ChannelHandlerContext, req: FullHttpRequest) {
         try {
             val clientAddr = ctx.channel().remoteAddress() as? InetSocketAddress ?: return
-            val host = req.headers().get(HttpHeaderNames.HOST) ?: return
-
+            val host = req.headers().get(HttpHeaderNames.HOST) ?: run { ctx.close(); return }
             val bodyBytes = ByteArray(req.content().readableBytes())
             req.content().getBytes(req.content().readerIndex(), bodyBytes)
 
@@ -83,10 +81,8 @@ class TransparentHttpHandler(
                 body = bodyBytes,
                 isRequest = true
             )
-
             val modified = proxy.processPacket(packet)
 
-            // forward to real server
             val hostParts = host.split(":")
             val realHost = hostParts[0]
             val realPort = hostParts.getOrNull(1)?.toIntOrNull() ?: 80
@@ -98,6 +94,7 @@ class TransparentHttpHandler(
                 Unpooled.wrappedBuffer(modified.body)
             )
             modified.headers.forEach { (k, v) -> outReq.headers().set(k, v) }
+            outReq.headers().set(HttpHeaderNames.HOST, host)
 
             Bootstrap().group(ctx.channel().eventLoop())
                 .channel(NioSocketChannel::class.java)
@@ -111,24 +108,17 @@ class TransparentHttpHandler(
                     }
                 })
                 .connect(realHost, realPort)
-                .addListener { future ->
-                    if (future.isSuccess) {
-                        (future as ChannelFuture).channel().writeAndFlush(outReq)
-                    } else {
-                        Log.e("CG2", "Transparent forward failed to $realHost:$realPort")
-                        ctx.close()
-                    }
+                .addListener { f ->
+                    if (f.isSuccess) (f as ChannelFuture).channel().writeAndFlush(outReq)
+                    else ctx.close()
                 }
         } catch (e: Exception) {
-            Log.e("CG2", "Transparent HTTP error", e)
+            Log.e("CG2", "Transparent HTTP handler error", e)
             ctx.close()
         }
     }
 
-    override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
-        Log.e("CG2", "Transparent HTTP exception", cause)
-        ctx.close()
-    }
+    override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) { ctx.close() }
 }
 
 class TransparentResponseHandler(
@@ -153,12 +143,8 @@ class TransparentResponseHandler(
                 headers = response.headers().associate { it.key to it.value }.toMutableMap(),
                 body = bodyBytes, isRequest = false
             )
-
             responsePacket = proxy.processPacket(responsePacket)
-
-            if (proxy.mode == InterceptMode.AUTO_INJECT) {
-                responsePacket = injector.inject(responsePacket)
-            }
+            if (proxy.mode == InterceptMode.AUTO_INJECT) responsePacket = injector.inject(responsePacket)
 
             val outResp = DefaultFullHttpResponse(
                 HttpVersion.HTTP_1_1,
@@ -180,12 +166,12 @@ class TransparentResponseHandler(
 }
 
 /**
- * Transparent HTTPS server on port 443.
- * Accepts TLS connections, uses SNI or first Client Hello to determine target,
- * does MITM with dynamic cert, forwards to real server.
+ * Transparent HTTPS server on port 8443.
+ * SNI-based MITM — reads ClientHello to get hostname,
+ * presents dynamic cert, forwards over real TLS.
  */
 class TransparentHttpsServer(
-    private val port: Int = 443,
+    private val port: Int = 8443,
     private val proxy: InterceptProxy,
     private val certManager: CertManager,
     private val injector: ContentInjector
@@ -207,9 +193,9 @@ class TransparentHttpsServer(
                 })
                 .childOption(ChannelOption.SO_KEEPALIVE, true)
                 .bind(port).sync()
-            Log.i("CG2", "Transparent HTTPS server on port $port")
+            Log.i("CG2", "Transparent HTTPS on port $port")
         } catch (e: Exception) {
-            Log.e("CG2", "Transparent HTTPS failed to bind port $port", e)
+            Log.e("CG2", "Transparent HTTPS failed on port $port: ${e.message}")
         }
     }
 
@@ -219,10 +205,6 @@ class TransparentHttpsServer(
     }
 }
 
-/**
- * Reads the TLS ClientHello to extract SNI hostname,
- * then sets up MITM with a cert for that host.
- */
 class SniExtractor(
     private val certManager: CertManager,
     private val proxy: InterceptProxy,
@@ -231,86 +213,48 @@ class SniExtractor(
 
     override fun channelRead(ctx: ChannelHandlerContext, msg: Any) {
         if (msg !is io.netty.buffer.ByteBuf) { ctx.fireChannelRead(msg); return }
-
-        // need at least 5 bytes to check TLS record header
         if (msg.readableBytes() < 5) { ctx.fireChannelRead(msg); return }
 
-        val readerIndex = msg.readerIndex()
-
-        // check if TLS handshake (0x16 = handshake, 0x03 = SSL 3.0+)
-        val contentType = msg.getByte(readerIndex).toInt() and 0xFF
-        if (contentType != 0x16) { ctx.fireChannelRead(msg); return }
-
-        // try to extract SNI
         val hostname = extractSni(msg) ?: "unknown"
-        Log.d("CG2", "TLS SNI: $hostname")
+        Log.d("CG2", "SNI: $hostname")
 
-        // remove ourselves, set up MITM pipeline
         val pipeline = ctx.pipeline()
         pipeline.remove(this)
 
         try {
             val keyManagers = certManager.getKeyManagerForHost(hostname)
             val sslCtx = SslContextBuilder.forServer(keyManagers[0]).build()
-            pipeline.addLast("ssl", sslCtx.newHandler(ctx.alloc()))
+            pipeline.addFirst("ssl", sslCtx.newHandler(ctx.alloc()))
             pipeline.addLast(HttpServerCodec())
             pipeline.addLast(HttpObjectAggregator(4_194_304))
             pipeline.addLast(TransparentMitmHandler(hostname, proxy, certManager, injector))
         } catch (e: Exception) {
-            Log.e("CG2", "MITM setup failed for $hostname", e)
-            ctx.close()
-            msg.release()
-            return
+            Log.e("CG2", "SNI MITM setup failed for $hostname", e)
+            ctx.close(); msg.release(); return
         }
-
-        // re-fire the buffered bytes into the new pipeline
         ctx.fireChannelRead(msg)
     }
 
     private fun extractSni(buf: io.netty.buffer.ByteBuf): String? {
         try {
             val start = buf.readerIndex()
-            // TLS record: type(1) + version(2) + length(2) + handshake
             if (buf.readableBytes() < 43) return null
-
-            val recordLen = buf.getUnsignedShort(start + 3)
-            if (buf.readableBytes() < 5 + recordLen) return null
-
-            // handshake type should be ClientHello (1)
-            val hsType = buf.getByte(start + 5).toInt() and 0xFF
-            if (hsType != 1) return null
-
-            // skip: hs_type(1) + hs_length(3) + client_version(2) + random(32) = 38
+            if (buf.getByte(start).toInt() and 0xFF != 0x16) return null
+            if (buf.getByte(start + 5).toInt() and 0xFF != 1) return null
             var pos = start + 5 + 38
-
-            // session ID
-            if (pos >= start + 5 + recordLen) return null
-            val sessionIdLen = buf.getByte(pos).toInt() and 0xFF
-            pos += 1 + sessionIdLen
-
-            // cipher suites
-            if (pos + 2 > start + 5 + recordLen) return null
-            val cipherLen = buf.getUnsignedShort(pos)
-            pos += 2 + cipherLen
-
-            // compression methods
-            if (pos >= start + 5 + recordLen) return null
-            val compLen = buf.getByte(pos).toInt() and 0xFF
-            pos += 1 + compLen
-
-            // extensions
-            if (pos + 2 > start + 5 + recordLen) return null
-            val extLen = buf.getUnsignedShort(pos)
-            pos += 2
-
+            if (pos >= buf.writerIndex()) return null
+            val sessionIdLen = buf.getByte(pos).toInt() and 0xFF; pos += 1 + sessionIdLen
+            if (pos + 2 > buf.writerIndex()) return null
+            val cipherLen = buf.getUnsignedShort(pos); pos += 2 + cipherLen
+            if (pos >= buf.writerIndex()) return null
+            val compLen = buf.getByte(pos).toInt() and 0xFF; pos += 1 + compLen
+            if (pos + 2 > buf.writerIndex()) return null
+            val extLen = buf.getUnsignedShort(pos); pos += 2
             val extEnd = pos + extLen
             while (pos + 4 <= extEnd) {
                 val extType = buf.getUnsignedShort(pos)
-                val extDataLen = buf.getUnsignedShort(pos + 2)
-                pos += 4
-
-                if (extType == 0) { // SNI extension
-                    // SNI list length(2) + type(1) + name length(2)
+                val extDataLen = buf.getUnsignedShort(pos + 2); pos += 4
+                if (extType == 0) {
                     if (pos + 5 > extEnd) return null
                     val nameLen = buf.getUnsignedShort(pos + 3)
                     if (pos + 5 + nameLen > extEnd) return null
@@ -343,17 +287,12 @@ class TransparentMitmHandler(
                 sourcePort = clientAddr?.port ?: 0,
                 direction = InterceptedPacket.Direction.REQUEST,
                 method = req.method().name(),
-                host = targetHost,
-                path = req.uri(),
-                protocol = "HTTPS",
+                host = targetHost, path = req.uri(), protocol = "HTTPS",
                 headers = req.headers().associate { it.key to it.value }.toMutableMap(),
-                body = bodyBytes,
-                isRequest = true
+                body = bodyBytes, isRequest = true
             )
-
             val modified = proxy.processPacket(packet)
 
-            // connect to real server over TLS
             val outboundSsl = SslContextBuilder.forClient()
                 .trustManager(InsecureTrustManagerFactory.INSTANCE).build()
 
@@ -364,7 +303,6 @@ class TransparentMitmHandler(
                 Unpooled.wrappedBuffer(modified.body)
             )
             modified.headers.forEach { (k, v) -> outReq.headers().set(k, v) }
-            // make sure Host header is set to real host
             outReq.headers().set(HttpHeaderNames.HOST, targetHost)
 
             Bootstrap().group(ctx.channel().eventLoop())
@@ -380,13 +318,9 @@ class TransparentMitmHandler(
                     }
                 })
                 .connect(targetHost, 443)
-                .addListener { future ->
-                    if (future.isSuccess) {
-                        (future as ChannelFuture).channel().writeAndFlush(outReq)
-                    } else {
-                        Log.e("CG2", "MITM forward failed to $targetHost")
-                        ctx.close()
-                    }
+                .addListener { f ->
+                    if (f.isSuccess) (f as ChannelFuture).channel().writeAndFlush(outReq)
+                    else ctx.close()
                 }
         } catch (e: Exception) {
             Log.e("CG2", "MITM handler error", e)
@@ -394,8 +328,5 @@ class TransparentMitmHandler(
         }
     }
 
-    override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
-        Log.e("CG2", "MITM exception", cause)
-        ctx.close()
-    }
+    override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) { ctx.close() }
 }
