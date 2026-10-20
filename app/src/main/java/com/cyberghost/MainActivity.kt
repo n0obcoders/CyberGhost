@@ -283,6 +283,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onDeleteSession = { name -> sessionSave.delete(name); savedSessions = sessionSave.list() },
                     onShareSession = { name -> sessionSave.getFile(name)?.let { packetExporter.shareFile(it) } },
+                    gatewayIp = gatewayIp,
                     onToggleAutoStart = { enabled ->
                         autoStart = enabled
                         prefs.edit().putBoolean("auto_start", enabled).apply()

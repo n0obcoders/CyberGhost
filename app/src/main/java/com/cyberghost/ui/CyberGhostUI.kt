@@ -58,7 +58,7 @@ fun CyberGhostTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = CgColors, content = content)
 }
 
-enum class Screen {
+enum class Screen { SETUP,
     DASHBOARD, INTERCEPT, CREDENTIALS, DEVICES, HOOKED,
     NETWORK, STATS, HIJACK, CAPTIVE, WEBSOCKET, SETTINGS, ABOUT
 }
@@ -109,7 +109,8 @@ fun CyberGhostApp(
     onSaveSession: () -> Unit,
     onDeleteSession: (String) -> Unit,
     onShareSession: (String) -> Unit,
-    onToggleAutoStart: (Boolean) -> Unit
+    onToggleAutoStart: (Boolean) -> Unit,
+    gatewayIp: String = "192.168.43.1"
 ) {
     var currentScreen by remember { mutableStateOf(Screen.DASHBOARD) }
     var searchQuery by remember { mutableStateOf("") }
@@ -144,6 +145,7 @@ fun CyberGhostApp(
                 Screen.WEBSOCKET -> WebSocketScreen(wsFrames)
                 Screen.SETTINGS -> SettingsScreen(mode, onModeChange, currentConfig, onConfigUpdate, profiles, onSaveProfile, onLoadProfile, onDeleteProfile, onExportCa, savedSessions, onSaveSession, onDeleteSession, onShareSession, autoStartEnabled, onToggleAutoStart) { currentScreen = it }
                 Screen.ABOUT -> AboutScreen()
+                Screen.SETUP -> SetupScreen(gatewayIp = gatewayIp, isRunning = isRunning)
             }
         }
     }
@@ -270,7 +272,7 @@ fun DashboardScreen(
                 ActionTile("Stats", Icons.Filled.BarChart, CgBlue, Modifier.weight(1f)) { navigateTo(Screen.STATS) }
                 ActionTile("Export\nHAR", Icons.Filled.FileDownload, CgDimGreen, Modifier.weight(1f), onExportHar)
                 ActionTile("Settings", Icons.Filled.Settings, CgGray, Modifier.weight(1f)) { navigateTo(Screen.SETTINGS) }
-                ActionTile("About", Icons.Filled.Info, CgGray, Modifier.weight(1f)) { navigateTo(Screen.ABOUT) }
+                ActionTile("Setup", Icons.Filled.HelpOutline, CgGreen, Modifier.weight(1f)) { navigateTo(Screen.SETUP) }
             }
         }
 
@@ -955,6 +957,7 @@ fun SettingsScreen(
     onExportCa: () -> Unit, savedSessions: List<String>,
     onSaveSession: () -> Unit, onDeleteSession: (String) -> Unit, onShareSession: (String) -> Unit,
     autoStart: Boolean, onToggleAutoStart: (Boolean) -> Unit,
+    gatewayIp: String = "192.168.43.1",
     navigateTo: (Screen) -> Unit
 ) {
     var profileName by remember { mutableStateOf(TextFieldValue("")) }
@@ -1208,3 +1211,183 @@ fun formatBytes(bytes: Long): String = when {
     else -> "${"%.2f".format(bytes / (1024.0 * 1024.0 * 1024.0))} GB"
 }
 
+
+// ============================
+// SETUP INSTRUCTIONS SCREEN
+// ============================
+@Composable
+fun SetupScreen(gatewayIp: String, isRunning: Boolean) {
+    LazyColumn(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text("Proxy Setup", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Targets must configure their WiFi proxy to route traffic through CyberGhost.",
+                fontSize = 12.sp, color = CgGray, lineHeight = 16.sp
+            )
+        }
+
+        // gateway info card
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = CgGreen.copy(0.08f)),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, CgGreen.copy(0.3f))
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Your Gateway", fontSize = 12.sp, color = CgGray)
+                    Spacer(Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(gatewayIp, fontSize = 28.sp, fontWeight = FontWeight.Black, color = CgGreen, fontFamily = FontFamily.Monospace)
+                        Text(":8080", fontSize = 20.sp, color = CgAmber, fontFamily = FontFamily.Monospace)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(8.dp).clip(CircleShape).background(if (isRunning) CgGreen else CgRed))
+                        Spacer(Modifier.width(6.dp))
+                        Text(if (isRunning) "Proxy running" else "Start capture first", fontSize = 11.sp, color = if (isRunning) CgGreen else CgRed)
+                    }
+                }
+            }
+        }
+
+        // android steps
+        item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(CgGreen.copy(0.15f)), contentAlignment = Alignment.Center) {
+                            Text("A", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgGreen)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text("Android Setup", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    SetupStep(1, "Settings → WiFi")
+                    SetupStep(2, "Long press the \"CyberGhost\" hotspot network")
+                    SetupStep(3, "Modify network → Show advanced options")
+                    SetupStep(4, "Proxy → Manual")
+                    SetupStep(5, "Hostname: $gatewayIp")
+                    SetupStep(6, "Port: 8080 → Save")
+                }
+            }
+        }
+
+        // ios steps
+        item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(28.dp).clip(RoundedCornerShape(6.dp)).background(CgCyan.copy(0.15f)), contentAlignment = Alignment.Center) {
+                            Text("i", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgCyan)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Text("iOS / iPhone Setup", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    SetupStep(1, "Settings → WiFi")
+                    SetupStep(2, "Tap ⓘ next to the hotspot network")
+                    SetupStep(3, "HTTP Proxy → Manual")
+                    SetupStep(4, "Server: $gatewayIp")
+                    SetupStep(5, "Port: 8080 → Save")
+                }
+            }
+        }
+
+        // CA cert install
+        item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgAmber.copy(0.06f)),
+                shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CgAmber.copy(0.2f))) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Security, contentDescription = null, tint = CgAmber, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("For HTTPS Decryption", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = CgAmber)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("Tap the CA button in CyberGhost → share the cert to the target device", fontSize = 12.sp, color = CgGray, lineHeight = 16.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Android: Settings → Security → Install certificate → CA certificate", fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text("iOS: Settings → General → VPN & Device Management → install cert, then enable it in Certificate Trust Settings", fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
+                }
+            }
+        }
+
+        // what you'll see
+        item {
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(12.dp)) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("What You'll See", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgWhite)
+                    Spacer(Modifier.height(8.dp))
+                    ResultRow(CgAmber, "HTTP traffic", "visible immediately after proxy set")
+                    ResultRow(CgCyan, "HTTPS traffic", "visible after CA cert installed")
+                    ResultRow(CgRed, "Credentials", "auto-extracted from login forms")
+                    ResultRow(CgMagenta, "Hook agent", "loads when target visits any HTTP page")
+                    ResultRow(CgDimGreen, "DNS queries", "visible after proxy set")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SetupStep(num: Int, text: String) {
+    Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+        Box(Modifier.size(20.dp).clip(CircleShape).background(CgGreen.copy(0.15f)), contentAlignment = Alignment.Center) {
+            Text("$num", fontSize = 10.sp, color = CgGreen, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(text, fontSize = 12.sp, color = CgWhite, lineHeight = 16.sp)
+    }
+}
+
+@Composable
+fun ResultRow(color: Color, label: String, desc: String) {
+    Row(Modifier.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(8.dp))
+        Text("$label: ", fontSize = 11.sp, color = color, fontWeight = FontWeight.SemiBold)
+        Text(desc, fontSize = 11.sp, color = CgGray)
+    }
+}
+
+// DevicesScreen already defined above — this adds networkHosts fallback display
+@Composable
+fun NetworkHostsAsDevices(hosts: List<NetworkHost>) {
+    if (hosts.isEmpty()) return
+    LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Text("Discovered Hosts", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+            Text("From last network scan — tap Setup to configure proxy on these devices", fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
+        }
+        items(hosts) { host ->
+            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = CgCard), shape = RoundedCornerShape(10.dp)) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(36.dp).clip(RoundedCornerShape(8.dp)).background(
+                        if (host.isGateway) CgGreen.copy(0.15f) else CgCyan.copy(0.1f)), contentAlignment = Alignment.Center) {
+                        Icon(if (host.isGateway) Icons.Filled.Router else Icons.Filled.PhoneAndroid,
+                            contentDescription = null, tint = if (host.isGateway) CgGreen else CgCyan, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(host.hostname ?: host.ip, fontSize = 13.sp, color = CgWhite, fontWeight = FontWeight.Medium)
+                        if (host.hostname != null) Text(host.ip, fontSize = 10.sp, color = CgGray)
+                        host.mac?.let { Text(it, fontSize = 9.sp, color = CgGray.copy(0.6f)) }
+                    }
+                    Column(horizontalAlignment = Alignment.End) {
+                        host.vendor?.let { Badge(containerColor = CgCyan.copy(0.12f)) { Text(it.take(10), fontSize = 8.sp, color = CgCyan, modifier = Modifier.padding(horizontal = 4.dp)) } }
+                        if (!host.isGateway) {
+                            Spacer(Modifier.height(4.dp))
+                            Text("needs proxy config", fontSize = 8.sp, color = CgAmber)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
