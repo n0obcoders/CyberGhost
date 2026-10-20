@@ -2006,13 +2006,11 @@ fun QrSetupScreen(gatewayIp: String, isRunning: Boolean, onExportCa: () -> Unit,
                 FilterChip(selected = qrMode == 0, onClick = { qrMode = 0 }, label = { Text("WiFi + Proxy", fontSize = 11.sp) }, modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CgGreen.copy(0.2f), selectedLabelColor = CgGreen))
                 FilterChip(selected = qrMode == 1, onClick = { qrMode = 1 }, label = { Text("Proxy Only", fontSize = 11.sp) }, modifier = Modifier.weight(1f),
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CgCyan.copy(0.2f), selectedLabelColor = CgCyan))
+            }
         }
         item {
             PacUrlCard(pacUrl = pacUrl, gatewayIp = gatewayIp)
-        }
-        item {
-                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CgCyan.copy(0.2f), selectedLabelColor = CgCyan))
-            }
         }
         if (qrMode == 0) {
             item {
