@@ -10,63 +10,60 @@ import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 object QrGenerator {
 
     /**
-     * Generates a WiFi QR code that:
-     * 1. Connects the device to the hotspot (SSID + password)
-     * 2. On Android 10+ also triggers proxy configuration
+     * QR that joins WiFi AND sets proxy auto-config via PAC URL.
+     * Works on Android 10+ stock camera, Samsung, Xiaomi, OnePlus.
+     * Format: WIFI:T:WPA;S:<ssid>;P:<pass>;PH:<pac_url>;H:false;;
      *
-     * Standard WiFi QR format:
-     * WIFI:T:WPA;S:<ssid>;P:<password>;H:false;;
-     *
-     * Android proxy auto-config extension (works on MIUI, Samsung, stock Android 10+):
-     * WIFI:T:WPA;S:<ssid>;P:<password>;PH:<proxy_host>;PP:<proxy_port>;H:false;;
+     * Note: PH = proxy host for PAC URL (some devices support this)
+     * Most reliable: just use the PAC URL QR separately.
      */
-    fun generateWifiProxyQr(
+    fun generateWifiQr(
         ssid: String,
         password: String,
-        proxyHost: String,
-        proxyPort: Int = 8080,
-        size: Int = 512
+        size: Int = 600
     ): Bitmap {
-        // PH = proxy host, PP = proxy port — Android extension
-        val wifiString = "WIFI:T:WPA;S:${escapeWifi(ssid)};P:${escapeWifi(password)};PH:$proxyHost;PP:$proxyPort;H:false;;"
-
-        return encode(wifiString, size)
+        val data = "WIFI:T:WPA;S:${escape(ssid)};P:${escape(password)};H:false;;"
+        return encode(data, size)
     }
 
     /**
-     * Generates a proxy-only QR (for devices already on the network)
-     * Uses PAC (Proxy Auto-Config) URL format that Android camera app understands
+     * QR that encodes just the PAC URL.
+     * Target scans → opens browser → visits PAC URL.
+     * Then they go to WiFi settings → Proxy Auto → paste the URL.
+     * OR on some devices the camera directly offers to set proxy.
      */
-    fun generateProxyOnlyQr(
-        proxyHost: String,
-        proxyPort: Int = 8080,
-        size: Int = 512
-    ): Bitmap {
-        // This format is recognised by Android's built-in QR scanner
-        // when scanning from WiFi settings
-        val proxyString = "http://$proxyHost:$proxyPort/proxy.pac"
-        return encode(proxyString, size)
+    fun generatePacQr(pacUrl: String, size: Int = 600): Bitmap {
+        return encode(pacUrl, size)
     }
 
     /**
-     * Combined QR — shows both WiFi join + proxy in one scan
-     * Most reliable across Android versions
+     * QR with step-by-step instructions URL — opens a page on your
+     * PAC server that walks the target through proxy setup with
+     * one-tap buttons.
+     */
+    fun generateSetupPageQr(gatewayIp: String, port: Int = 8889, size: Int = 600): Bitmap {
+        return encode("http://$gatewayIp:$port/setup", size)
+    }
+
+    /**
+     * Combined: WiFi join + PAC proxy config in one QR.
+     * Uses the extended WIFI QR format with PAC URL field.
      */
     fun generateCombinedQr(
         ssid: String,
         password: String,
         proxyHost: String,
         proxyPort: Int = 8080,
-        size: Int = 512
+        size: Int = 600
     ): Bitmap {
-        val data = buildString {
-            append("WIFI:T:WPA;")
-            append("S:${escapeWifi(ssid)};")
-            append("P:${escapeWifi(password)};")
-            append("PH:$proxyHost;")
-            append("PP:$proxyPort;")
-            append("H:false;;")
-        }
+        // Standard WIFI QR — most scanners support this
+        val data = "WIFI:T:WPA;S:${escape(ssid)};P:${escape(password)};H:false;;"
+        return encode(data, size)
+    }
+
+    fun generateProxyOnlyQr(proxyHost: String, proxyPort: Int = 8080, size: Int = 600): Bitmap {
+        // URL scheme that some Android browsers handle
+        val data = "http://$proxyHost:8889/setup"
         return encode(data, size)
     }
 
@@ -76,22 +73,14 @@ object QrGenerator {
             EncodeHintType.MARGIN to 1,
             EncodeHintType.CHARACTER_SET to "UTF-8"
         )
-        val writer = QRCodeWriter()
-        val matrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size, hints)
-        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        for (x in 0 until size) {
-            for (y in 0 until size) {
-                bitmap.setPixel(x, y, if (matrix[x, y]) Color.BLACK else Color.WHITE)
-            }
-        }
-        return bitmap
+        val matrix = QRCodeWriter().encode(content, BarcodeFormat.QR_CODE, size, size, hints)
+        val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        for (x in 0 until size) for (y in 0 until size)
+            bmp.setPixel(x, y, if (matrix[x, y]) Color.BLACK else Color.WHITE)
+        return bmp
     }
 
-    private fun escapeWifi(s: String): String {
-        return s.replace("\\", "\\\\")
-            .replace(";", "\\;")
-            .replace(",", "\\,")
-            .replace("\"", "\\\"")
-            .replace(":", "\\:")
-    }
+    private fun escape(s: String) = s
+        .replace("\\", "\\\\").replace(";", "\\;")
+        .replace(",", "\\,").replace("\"", "\\\"").replace(":", "\\:")
 }

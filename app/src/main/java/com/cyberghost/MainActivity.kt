@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private var transparentHttp: TransparentHttpServer? = null
     private var transparentHttps: TransparentHttpsServer? = null
     private var captivePortal: CaptivePortal? = null
+    private var pacServer: PacServer? = null
     private var hookJs: String = ""
 
     private lateinit var arpScanner: ArpScanner
@@ -139,6 +140,8 @@ class MainActivity : ComponentActivity() {
                                 dns.start()
                                 launch { dns.queries.collect { trafficStats.recordDns() } }
                             }
+
+                            pacServer = PacServer(8889, gatewayIp, 8080).also { it.start() }
 
                             captivePortal = CaptivePortal(8888).also { portal ->
                                 portal.config = captiveConfig; portal.start()
@@ -269,6 +272,7 @@ class MainActivity : ComponentActivity() {
         transparentHttps?.stop(); transparentHttps = null; c2Server?.stop(); c2Server = null
         mediaServer?.stop(); mediaServer = null; dnsCapture?.stop(); dnsCapture = null
         captivePortal?.stop(); captivePortal = null
+        pacServer?.stop(); pacServer = null
     }
 
     private fun createNotificationChannel() {

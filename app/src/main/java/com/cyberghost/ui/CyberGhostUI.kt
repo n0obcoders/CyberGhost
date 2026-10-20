@@ -1968,7 +1968,7 @@ fun FeatureItem(text: String) {
 // QR SETUP SCREEN
 // ============================
 @Composable
-fun QrSetupScreen(gatewayIp: String, isRunning: Boolean, onExportCa: () -> Unit) {
+fun QrSetupScreen(gatewayIp: String, isRunning: Boolean, onExportCa: () -> Unit, pacUrl: String = "") {
     var ssid by remember { mutableStateOf(TextFieldValue("CyberGhost")) }
     var password by remember { mutableStateOf(TextFieldValue("")) }
     var showPassword by remember { mutableStateOf(false) }
@@ -2006,6 +2006,11 @@ fun QrSetupScreen(gatewayIp: String, isRunning: Boolean, onExportCa: () -> Unit)
                 FilterChip(selected = qrMode == 0, onClick = { qrMode = 0 }, label = { Text("WiFi + Proxy", fontSize = 11.sp) }, modifier = Modifier.weight(1f),
                     colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CgGreen.copy(0.2f), selectedLabelColor = CgGreen))
                 FilterChip(selected = qrMode == 1, onClick = { qrMode = 1 }, label = { Text("Proxy Only", fontSize = 11.sp) }, modifier = Modifier.weight(1f),
+        }
+        item {
+            PacUrlCard(pacUrl = pacUrl, gatewayIp = gatewayIp)
+        }
+        item {
                     colors = FilterChipDefaults.filterChipColors(selectedContainerColor = CgCyan.copy(0.2f), selectedLabelColor = CgCyan))
             }
         }
@@ -2103,4 +2108,51 @@ fun formatBytes(bytes: Long): String = when {
     bytes < 1024 * 1024 -> "${bytes / 1024} KB"
     bytes < 1024 * 1024 * 1024 -> "${"%.1f".format(bytes / (1024.0 * 1024.0))} MB"
     else -> "${"%.2f".format(bytes / (1024.0 * 1024.0 * 1024.0))} GB"
+}
+
+// PAC URL display composable — shown in QR setup screen
+@Composable
+fun PacUrlCard(pacUrl: String, gatewayIp: String, proxyPort: Int = 8080) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = CgGreen.copy(0.06f)),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, CgGreen.copy(0.3f))
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Link, contentDescription = null, tint = CgGreen, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("PAC Auto-Config URL", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = CgGreen)
+            }
+            Spacer(Modifier.height(8.dp))
+            Text("Most reliable method — works on Android and iOS without manual proxy entry.",
+                fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
+            Spacer(Modifier.height(10.dp))
+            SelectionContainer {
+                Text(pacUrl.ifBlank { "http://$gatewayIp:8889/proxy.pac" },
+                    fontSize = 12.sp, color = CgGreen, fontFamily = FontFamily.Monospace,
+                    modifier = Modifier.fillMaxWidth()
+                        .background(CgBg, RoundedCornerShape(8.dp))
+                        .padding(10.dp))
+            }
+            Spacer(Modifier.height(10.dp))
+            Text("Android: WiFi → long press → Modify → Proxy Auto-Config → paste URL",
+                fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
+            Spacer(Modifier.height(4.dp))
+            Text("iOS: Settings → WiFi → ⓘ → HTTP Proxy → Automatic → paste URL",
+                fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = CgGray.copy(0.15f))
+            Spacer(Modifier.height(10.dp))
+            Text("Or scan QR with phone camera to open setup page:", fontSize = 11.sp, color = CgGray)
+            Spacer(Modifier.height(6.dp))
+            Text("http://$gatewayIp:8889/setup", fontSize = 11.sp, color = CgCyan,
+                fontFamily = FontFamily.Monospace,
+                modifier = Modifier.background(CgBg, RoundedCornerShape(6.dp)).padding(8.dp))
+            Spacer(Modifier.height(8.dp))
+            Text("The setup page walks targets through configuration with copy-paste buttons.",
+                fontSize = 10.sp, color = CgGray.copy(0.7f))
+        }
+    }
 }
