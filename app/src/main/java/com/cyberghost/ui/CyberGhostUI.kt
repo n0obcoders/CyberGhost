@@ -1,4 +1,5 @@
 @file:OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+import androidx.compose.foundation.Image
 package com.cyberghost.ui
 
 import androidx.compose.animation.*
@@ -145,7 +146,7 @@ fun CyberGhostApp(
                 Screen.WEBSOCKET -> WebSocketScreen(wsFrames)
                 Screen.SETTINGS -> SettingsScreen(mode, onModeChange, currentConfig, onConfigUpdate, profiles, onSaveProfile, onLoadProfile, onDeleteProfile, onExportCa, savedSessions, onSaveSession, onDeleteSession, onShareSession, autoStartEnabled, onToggleAutoStart) { currentScreen = it }
                 Screen.ABOUT -> AboutScreen()
-                Screen.SETUP -> SetupScreen(gatewayIp = gatewayIp, isRunning = isRunning)
+                Screen.SETUP -> QrSetupScreen(gatewayIp = gatewayIp, isRunning = isRunning, onExportCa = onExportCa)
             }
         }
     }
@@ -1390,4 +1391,265 @@ fun NetworkHostsAsDevices(hosts: List<NetworkHost>) {
             }
         }
     }
+}
+
+// ============================
+// QR SETUP SCREEN (replaces SetupScreen)
+// ============================
+@Composable
+fun QrSetupScreen(
+    gatewayIp: String,
+    isRunning: Boolean,
+    onExportCa: () -> Unit
+) {
+    var ssid by remember { mutableStateOf(TextFieldValue("CyberGhost")) }
+    var password by remember { mutableStateOf(TextFieldValue("cyberghost123")) }
+    var showPassword by remember { mutableStateOf(false) }
+    var qrBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var qrMode by remember { mutableStateOf(0) } // 0=wifi+proxy, 1=proxy only
+
+    // regenerate QR whenever inputs change
+    LaunchedEffect(ssid.text, password.text, gatewayIp, qrMode) {
+        try {
+            qrBitmap = when (qrMode) {
+                0 -> com.cyberghost.core.QrGenerator.generateCombinedQr(
+                    ssid = ssid.text.ifBlank { "CyberGhost" },
+                    password = password.text.ifBlank { "cyberghost123" },
+                    proxyHost = gatewayIp,
+                    proxyPort = 8080,
+                    size = 600
+                )
+                else -> com.cyberghost.core.QrGenerator.generateProxyOnlyQr(
+                    proxyHost = gatewayIp,
+                    proxyPort = 8080,
+                    size = 600
+                )
+            }
+        } catch (_: Exception) {}
+    }
+
+    LazyColumn(
+        Modifier.fillMaxSize().padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Text("Quick Connect", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = CgWhite)
+            Text("Target scans this QR to join your hotspot with proxy pre-configured.", fontSize = 12.sp, color = CgGray)
+        }
+
+        // status
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isRunning) CgGreen.copy(0.08f) else CgRed.copy(0.08f)
+                ),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.dp, if (isRunning) CgGreen.copy(0.3f) else CgRed.copy(0.3f))
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(8.dp).clip(CircleShape).background(if (isRunning) CgGreen else CgRed))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (isRunning) "Proxy running on $gatewayIp:8080"
+                        else "Start capture first, then share this QR",
+                        fontSize = 12.sp, color = if (isRunning) CgGreen else CgRed
+                    )
+                }
+            }
+        }
+
+        // QR mode selector
+        item {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = qrMode == 0,
+                    onClick = { qrMode = 0 },
+                    label = { Text("WiFi + Proxy", fontSize = 11.sp) },
+                    modifier = Modifier.weight(1f),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = CgGreen.copy(0.2f),
+                        selectedLabelColor = CgGreen
+                    )
+                )
+                FilterChip(
+                    selected = qrMode == 1,
+                    onClick = { qrMode = 1 },
+                    label = { Text("Proxy Only", fontSize = 11.sp) },
+                    modifier = Modifier.weight(1f),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = CgCyan.copy(0.2f),
+                        selectedLabelColor = CgCyan
+                    )
+                )
+            }
+        }
+
+        // hotspot config (only for wifi+proxy mode)
+        if (qrMode == 0) {
+            item {
+                Card(
+                    Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = CgCard),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Text("Hotspot Credentials", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
+                        Text("Must match your actual hotspot name and password", fontSize = 10.sp, color = CgGray)
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = ssid, onValueChange = { ssid = it },
+                            label = { Text("Hotspot Name (SSID)", fontSize = 10.sp) },
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = CgWhite),
+                            modifier = Modifier.fillMaxWidth(), singleLine = true,
+                            shape = RoundedCornerShape(8.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedContainerColor = CgBg, focusedContainerColor = CgBg,
+                                unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen
+                            )
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = password, onValueChange = { password = it },
+                            label = { Text("Hotspot Password", fontSize = 10.sp) },
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, color = CgWhite),
+                            visualTransformation = if (showPassword)
+                                androidx.compose.ui.text.input.VisualTransformation.None
+                            else
+                                androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { showPassword = !showPassword }) {
+                                    Icon(
+                                        if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        contentDescription = null, tint = CgGray, modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(), singleLine = true,
+                            shape = RoundedCornerShape(8.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedContainerColor = CgBg, focusedContainerColor = CgBg,
+                                unfocusedBorderColor = CgGray.copy(0.3f), focusedBorderColor = CgGreen
+                            )
+                        )
+                    }
+                }
+            }
+        }
+
+        // QR code display
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = CgCard),
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        if (qrMode == 0) "Scan to Join + Set Proxy" else "Scan to Set Proxy",
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgWhite
+                    )
+                    Spacer(Modifier.height(16.dp))
+
+                    qrBitmap?.let { bmp ->
+                        // white background for QR visibility
+                        Box(
+                            Modifier.size(260.dp).clip(RoundedCornerShape(12.dp)).background(Color.White).padding(12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            androidx.compose.foundation.layout.Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { androidx.compose.foundation.Image(
+                                bitmap = bmp.toComposeImageBitmap(),
+                                contentDescription = "QR Code",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    } ?: Box(
+                        Modifier.size(260.dp).clip(RoundedCornerShape(12.dp)).background(Color.White),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(color = CgGreen, modifier = Modifier.size(32.dp))
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    // proxy info under QR
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("PROXY", fontSize = 9.sp, color = CgGray, letterSpacing = 1.sp)
+                            Text(gatewayIp, fontSize = 12.sp, color = CgGreen, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("PORT", fontSize = 9.sp, color = CgGray, letterSpacing = 1.sp)
+                            Text("8080", fontSize = 12.sp, color = CgAmber, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                        }
+                        if (qrMode == 0) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("SSID", fontSize = 9.sp, color = CgGray, letterSpacing = 1.sp)
+                                Text(ssid.text.take(12), fontSize = 12.sp, color = CgCyan, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // CA cert export
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = CgAmber.copy(0.06f)),
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, CgAmber.copy(0.2f))
+            ) {
+                Row(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Step 2: Install CA Cert", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = CgAmber)
+                        Text("Required for HTTPS decryption. Share after target connects.", fontSize = 11.sp, color = CgGray, lineHeight = 15.sp)
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = onExportCa,
+                        colors = ButtonDefaults.buttonColors(containerColor = CgAmber.copy(0.2f)),
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, CgAmber.copy(0.4f))
+                    ) {
+                        Icon(Icons.Filled.Security, contentDescription = null, tint = CgAmber, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Export CA", color = CgAmber, fontSize = 12.sp)
+                    }
+                }
+            }
+        }
+
+        // manual instructions fallback
+        item {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = CgCard),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Manual Setup (if QR doesn't work)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = CgGray)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Android: Settings → WiFi → long press network → Modify → Proxy Manual → $gatewayIp : 8080", fontSize = 11.sp, color = CgGray, lineHeight = 16.sp)
+                    Spacer(Modifier.height(4.dp))
+                    Text("iOS: Settings → WiFi → ⓘ → HTTP Proxy Manual → $gatewayIp : 8080", fontSize = 11.sp, color = CgGray, lineHeight = 16.sp)
+                }
+            }
+        }
+    }
+}
+
+// extension to convert Bitmap to ImageBitmap
+
+// correct bitmap → ImageBitmap conversion
+fun android.graphics.Bitmap.toComposeImageBitmap(): androidx.compose.ui.graphics.ImageBitmap {
+    return androidx.compose.ui.graphics.asImageBitmap(this)
 }
