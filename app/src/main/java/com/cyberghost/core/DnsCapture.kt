@@ -20,10 +20,10 @@ data class DnsQuery(
 )
 
 class DnsCapture(
-    private val listenPort: Int = 5353,
+    private val listenPort: Int = 53,  // port 53 — real DNS port
     private val upstreamDns: String = "8.8.8.8",
-    private val gatewayIp: String = "192.168.43.1",
-    var transparentMode: Boolean = true  // redirect all DNS to gateway
+    var gatewayIp: String = "192.168.43.1",
+    var transparentMode: Boolean = true
 ) {
     private val _queries = MutableSharedFlow<DnsQuery>(replay = 0, extraBufferCapacity = 512)
     val queries: SharedFlow<DnsQuery> = _queries
@@ -31,28 +31,29 @@ class DnsCapture(
     private var running = false
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // domains we never hijack — let these resolve normally
     private val bypassDomains = setOf(
-        "connectivitycheck.gstatic.com",
-        "clients3.google.com",
-        "play.googleapis.com",
-        "android.clients.google.com",
-        "mtalk.google.com",
-        "alt1-mtalk.google.com",
-        "alt2-mtalk.google.com",
-        "alt3-mtalk.google.com",
-        "alt4-mtalk.google.com"
+        "connectivitycheck.gstatic.com", "clients3.google.com",
+        "play.googleapis.com", "android.clients.google.com",
+        "mtalk.google.com", "captive.apple.com",
+        "www.apple.com", "captivedetect.apple.com"
     )
 
     fun start() {
         running = true
         try {
             socket = DatagramSocket(listenPort)
-            Log.i("CG2", "DNS server started on port $listenPort, transparent=$transparentMode")
+            Log.i("CG2", "DNS server started on port $listenPort, gateway=$gatewayIp, transparent=$transparentMode")
         } catch (e: Exception) {
-            Log.e("CG2", "DNS: failed to bind port $listenPort", e)
-            running = false
-            return
+            Log.e("CG2", "DNS: failed to bind port $listenPort — try running as root or use iptables redirect", e)
+            // try port 5353 as fallback
+            try {
+                socket = DatagramSocket(5353)
+                Log.i("CG2", "DNS fallback to port 5353")
+            } catch (e2: Exception) {
+                Log.e("CG2", "DNS: port 5353 also failed", e2)
+                running = false
+                return
+            }
         }
         scope.launch {
             val buf = ByteArray(512)
@@ -79,17 +80,11 @@ class DnsCapture(
             val qType = parseQueryType(data) ?: "?"
 
             if (transparentMode && qType == "A" && !shouldBypass(domain)) {
-                // spoof: respond with gateway IP
                 val spoofed = buildSpoofedResponse(data, inPacket.length, gatewayIp)
                 socket?.send(DatagramPacket(spoofed, spoofed.size, inPacket.address, inPacket.port))
-
-                _queries.tryEmit(DnsQuery(
-                    Instant.now(), inPacket.address.hostAddress ?: "unknown",
-                    inPacket.port, domain, qType, "$gatewayIp (spoofed)"
-                ))
-                Log.d("CG2", "DNS spoof: $domain -> $gatewayIp")
+                _queries.tryEmit(DnsQuery(Instant.now(), inPacket.address.hostAddress ?: "unknown", inPacket.port, domain, qType, "$gatewayIp [spoofed]"))
+                Log.d("CG2", "DNS spoof: $domain → $gatewayIp")
             } else {
-                // pass through to upstream
                 val upstream = DatagramSocket()
                 upstream.soTimeout = 3000
                 upstream.send(DatagramPacket(data, data.size, InetAddress.getByName(upstreamDns), 53))
@@ -101,54 +96,30 @@ class DnsCapture(
                     resolvedIp = parseResponseIp(responsePacket.data, responsePacket.length)
                     socket?.send(DatagramPacket(responsePacket.data, responsePacket.length, inPacket.address, inPacket.port))
                 } catch (_: Exception) {} finally { upstream.close() }
-
-                _queries.tryEmit(DnsQuery(
-                    Instant.now(), inPacket.address.hostAddress ?: "unknown",
-                    inPacket.port, domain, qType, resolvedIp
-                ))
+                _queries.tryEmit(DnsQuery(Instant.now(), inPacket.address.hostAddress ?: "unknown", inPacket.port, domain, qType, resolvedIp))
             }
         } catch (e: Exception) {
             Log.e("CG2", "DNS query handling failed", e)
         }
     }
 
-    private fun shouldBypass(domain: String): Boolean {
-        return bypassDomains.any { domain.equals(it, ignoreCase = true) || domain.endsWith(".$it", ignoreCase = true) }
+    private fun shouldBypass(domain: String) = bypassDomains.any {
+        domain.equals(it, ignoreCase = true) || domain.endsWith(".$it", ignoreCase = true)
     }
 
     private fun buildSpoofedResponse(query: ByteArray, queryLen: Int, ip: String): ByteArray {
         val buf = ByteBuffer.allocate(queryLen + 16)
-
-        // copy query header, flip to response
-        buf.put(query, 0, 2)                    // transaction ID
-        buf.putShort(0x8180.toShort())           // flags: response, no error
-        buf.putShort(1)                          // questions: 1
-        buf.putShort(1)                          // answers: 1
-        buf.putShort(0)                          // authority: 0
-        buf.putShort(0)                          // additional: 0
-
-        // copy question section from query (skip 12-byte header)
+        buf.put(query, 0, 2)
+        buf.putShort(0x8180.toShort())
+        buf.putShort(1); buf.putShort(1); buf.putShort(0); buf.putShort(0)
         var pos = 12
-        while (pos < queryLen && query[pos].toInt() != 0) {
-            pos += (query[pos].toInt() and 0xFF) + 1
-        }
-        pos += 5 // null + qtype(2) + qclass(2)
+        while (pos < queryLen && query[pos].toInt() != 0) pos += (query[pos].toInt() and 0xFF) + 1
+        pos += 5
         buf.put(query, 12, pos - 12)
-
-        // answer section — pointer to name in question
-        buf.putShort(0xC00C.toInt().toShort())   // name pointer to offset 12
-        buf.putShort(1)                          // type A
-        buf.putShort(1)                          // class IN
-        buf.putInt(60)                           // TTL 60 seconds
-        buf.putShort(4)                          // data length 4
-
-        // IP address bytes
-        val parts = ip.split(".")
-        for (p in parts) buf.put((p.toInt() and 0xFF).toByte())
-
-        val result = ByteArray(buf.position())
-        buf.flip()
-        buf.get(result)
+        buf.putShort(0xC00C.toInt().toShort())
+        buf.putShort(1); buf.putShort(1); buf.putInt(60); buf.putShort(4)
+        ip.split(".").forEach { buf.put((it.toInt() and 0xFF).toByte()) }
+        val result = ByteArray(buf.position()); buf.flip(); buf.get(result)
         return result
     }
 
@@ -157,7 +128,8 @@ class DnsCapture(
         val sb = StringBuilder(); var pos = 12
         while (pos < data.size) {
             val len = data[pos].toInt() and 0xFF; if (len == 0) break
-            if (sb.isNotEmpty()) sb.append('.'); pos++
+            if (sb.isNotEmpty()) sb.append('.')
+            pos++
             for (i in 0 until len) { if (pos + i >= data.size) return sb.toString(); sb.append(data[pos + i].toInt().toChar()) }
             pos += len
         }
@@ -166,19 +138,21 @@ class DnsCapture(
 
     private fun parseQueryType(data: ByteArray): String? {
         var pos = 12
-        while (pos < data.size && data[pos].toInt() != 0) { pos += (data[pos].toInt() and 0xFF) + 1 }; pos++
+        while (pos < data.size && data[pos].toInt() != 0) pos += (data[pos].toInt() and 0xFF) + 1
+        pos++
         if (pos + 2 > data.size) return null
-        val typeCode = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
-        return when (typeCode) { 1->"A"; 28->"AAAA"; 5->"CNAME"; 15->"MX"; 2->"NS"; 12->"PTR"; 16->"TXT"; 6->"SOA"; 33->"SRV"; else->"TYPE$typeCode" }
+        val tc = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF)
+        return when (tc) { 1->"A"; 28->"AAAA"; 5->"CNAME"; 15->"MX"; 2->"NS"; 12->"PTR"; 16->"TXT"; else->"TYPE$tc" }
     }
 
     private fun parseResponseIp(data: ByteArray, length: Int): String? {
         var pos = 12
-        while (pos < length && data[pos].toInt() != 0) { pos += (data[pos].toInt() and 0xFF) + 1 }; pos += 5
-        if (pos + 12 > length) return null; pos += 2
+        while (pos < length && data[pos].toInt() != 0) pos += (data[pos].toInt() and 0xFF) + 1
+        pos += 5; if (pos + 12 > length) return null; pos += 2
         val aType = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF); pos += 8
         val rdLen = ((data[pos].toInt() and 0xFF) shl 8) or (data[pos + 1].toInt() and 0xFF); pos += 2
-        if (aType == 1 && rdLen == 4 && pos + 4 <= length) return "${data[pos].toInt() and 0xFF}.${data[pos+1].toInt() and 0xFF}.${data[pos+2].toInt() and 0xFF}.${data[pos+3].toInt() and 0xFF}"
+        if (aType == 1 && rdLen == 4 && pos + 4 <= length)
+            return "${data[pos].toInt() and 0xFF}.${data[pos+1].toInt() and 0xFF}.${data[pos+2].toInt() and 0xFF}.${data[pos+3].toInt() and 0xFF}"
         return null
     }
 }
