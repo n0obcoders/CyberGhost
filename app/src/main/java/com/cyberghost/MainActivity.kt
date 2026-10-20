@@ -281,7 +281,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showNotification(text: String) {
-        val n = NotificationCompat.Builder(this, "cg2_status").setContentTitle("CyberGhost 2").setContentText(text)
+        val n = NotificationCompat.Builder(this, "cg2_status").setContentTitle("CyberGhost").setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_manage).setOngoing(true).build()
         getSystemService(NotificationManager::class.java).notify(1337, n)
     }

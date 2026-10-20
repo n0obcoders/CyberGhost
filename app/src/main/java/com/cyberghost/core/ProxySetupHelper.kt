@@ -4,7 +4,7 @@ object ProxySetupHelper {
 
     fun getSetupInstructions(gatewayIp: String, proxyPort: Int = 8080): String {
         return """
-CyberGhost 2 — Proxy Setup
+CyberGhost — Proxy Setup
 
 Gateway IP: $gatewayIp
 Proxy Port: $proxyPort

@@ -11,7 +11,7 @@ class CaptureService : Service() {
         val channel = NotificationChannel("cg2_service", "CyberGhost Service", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         val notification = NotificationCompat.Builder(this, "cg2_service")
-            .setContentTitle("CyberGhost 2")
+            .setContentTitle("CyberGhost")
             .setContentText("Running in background")
             .setSmallIcon(android.R.drawable.ic_menu_manage)
             .setOngoing(true).build()

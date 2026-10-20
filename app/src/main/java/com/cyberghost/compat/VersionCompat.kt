@@ -23,7 +23,7 @@ object VersionCompat {
     }
     fun createNotificationChannel(ctx: Context) {
         ctx.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "CyberGhost 2", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
+            NotificationChannel(CHANNEL_ID, "CyberGhost", NotificationManager.IMPORTANCE_LOW).apply { setShowBadge(false) })
     }
-    fun buildNotification(ctx: Context, text: String): Notification = NotificationCompat.Builder(ctx, CHANNEL_ID).setContentTitle("CyberGhost 2").setContentText(text).setSmallIcon(android.R.drawable.ic_menu_manage).setOngoing(true).build()
+    fun buildNotification(ctx: Context, text: String): Notification = NotificationCompat.Builder(ctx, CHANNEL_ID).setContentTitle("CyberGhost").setContentText(text).setSmallIcon(android.R.drawable.ic_menu_manage).setOngoing(true).build()
 }
